@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stig"
+version = "0.3.0"
+description = "Stig — a non-agentic coding system. All working state lives in the repository as typed annotations; stateless model calls fire on annotations they can act on."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Stig" }]
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+stig = "stig.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stig*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
