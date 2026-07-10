@@ -16,9 +16,10 @@ from .annotations import Annotation, status_is_valid
 from .checks import Checks
 from .context import ContextBuilder
 from .diffutil import AnnotationTouchError, assert_no_annotation_lines, diff_hash
-from .gitutil import Git, GitError
+from .gitutil import Git
 from .handlers import HANDLERS, HandlerResult, NewAnnotation
 from .models import Model
+from .patcher import PatchError, apply_diff
 from .regions import region_hash, repo_structure_hash, resolve_region
 from .repo import ARCHITECTURE_FILE, Repo
 
@@ -305,8 +306,8 @@ class Scheduler:
 
         if diff:
             try:
-                self.git.apply_patch(diff)
-            except GitError as exc:
+                apply_diff(self.repo, diff)
+            except PatchError as exc:
                 return self._fail(active, diff, f"diff won't apply: {exc}")
 
         check = self.checks.run(self.repo.root)
@@ -370,19 +371,24 @@ class Scheduler:
         base = self.repo._next_counters(annotations)  # noqa: SLF001 - internal helper
         spawned: list[str] = []
         rendered: list[str] = []
+        from .annotations import DEFAULT_STATUS, KIND_PREFIX
+
         for na in new_annos:
+            if na.kind not in KIND_PREFIX:  # ignore an unknown proposed kind
+                continue
             counters.setdefault(na.kind, base.get(na.kind, 0))
             counters[na.kind] += 1
-            from .annotations import KIND_PREFIX
-
             new_id = f"{KIND_PREFIX[na.kind]}{counters[na.kind]:02d}"
-            attrs = {"status": na.status, **na.attrs}
+            # Normalize an out-of-vocabulary status to the kind's default so the
+            # medium stays self-describing (SPEC §04, §05).
+            status = na.status if status_is_valid(na.kind, na.status) else DEFAULT_STATUS[na.kind]
+            attrs = {"status": status, **na.attrs}
             ann = Annotation(
                 kind=na.kind, id=new_id, attrs=attrs, body=na.body,
                 file=active.file, start_line=0, end_line=0, indent=active.indent,
             )
             rendered.append(ann.header_text())
-            spawned.append(f"{new_id} ({na.status})")
+            spawned.append(f"{new_id} ({status})")
         # Place spawned annotations with the annotation that generated the work.
         fresh = {a.id: a for a in self.repo.parse_all() if a.id}
         anchor = fresh.get(active.id)

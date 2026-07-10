@@ -263,6 +263,21 @@ def test_graduation_relay_verifier_to_enforced(workrepo):
 
 # -- budget (SPEC §06) ------------------------------------------------------
 
+def test_new_annotation_status_normalized(workrepo):
+    repo, git = workrepo
+    repo.write("db.py", "# @constraint(c01, status=asserted): x\ndef fetch():\n    return []\n")
+    git.commit("human: seed")
+    # Handler proposes a decision with an out-of-vocabulary status.
+    resp = handler_json(
+        updates=[{"id": "c01", "status": "verified"}],
+        new_annotations=[{"kind": "decision", "status": "accepted", "body": "chose X"}],
+    )
+    sched, repo, git = make_sched(workrepo, [resp])
+    sched.step()
+    dec = next(a for a in repo.parse_all() if a.kind == "decision")
+    assert dec.status == "recorded"  # normalized from the invalid "accepted"
+
+
 def test_budget_exhaustion(workrepo):
     repo, git = workrepo
     stub = "# @goal(g01, status=open): never satisfied\ndef f():\n    return 0\n"

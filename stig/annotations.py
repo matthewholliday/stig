@@ -41,6 +41,15 @@ VALID_STATUS: dict[str, set[str]] = {
 # Kinds that are a permanent record: never actionable, never consumed (SPEC §03).
 PERMANENT_KINDS = {"decision", "tried"}
 
+# The status a newly-minted annotation of each kind starts in (SPEC §05).
+DEFAULT_STATUS: dict[str, str] = {
+    "goal": "open",
+    "constraint": "asserted",
+    "unresolved": "open",
+    "decision": "recorded",
+    "tried": "recorded",
+}
+
 # ---------------------------------------------------------------------------
 # Grammar (SPEC §04).
 # ---------------------------------------------------------------------------
