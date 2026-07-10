@@ -200,7 +200,10 @@ def cmd_seed(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     parser = argparse.ArgumentParser(prog="stig", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"stig {__version__}")
     parser.add_argument("--root", default=".", help="repository root (default: .)")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="model id for handlers")
     parser.add_argument("--no-venv", action="store_true", help="run checks in the current env")
