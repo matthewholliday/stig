@@ -44,6 +44,14 @@ class Git:
             return None
         return self._run("rev-parse", "HEAD").stdout.strip()
 
+    def config_get(self, key: str) -> str:
+        """The effective value of a git config key, or "" if unset anywhere."""
+        return self._run("config", "--get", key, check=False).stdout.strip()
+
+    def config_set(self, key: str, value: str) -> None:
+        """Set a key in this repository's local config."""
+        self._run("config", key, value)
+
     def has_uncommitted_changes(self) -> bool:
         """True if the working tree or index has changes (tracked or untracked)."""
         proc = self._run("status", "--porcelain")
