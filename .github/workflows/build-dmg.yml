@@ -11,7 +11,9 @@ name: Build macOS DMG
 
 on:
   push:
-    branches: [main]
+    # Kept in step with ci.yml's branch list: the trunk is the spec branch, and
+    # a DMG build that only watches main goes silent on every real push.
+    branches: [claude/stig-spec-i4gtmh, main]
     tags: ["v*"]
     paths:
       - "stig/**"
