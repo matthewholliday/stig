@@ -25,19 +25,21 @@ def diff_hash(diff_text: str) -> str:
 
 
 def _hunk_body_lines(diff_text: str):
-    """Yield (marker, content) for +/- lines inside hunks (not headers)."""
-    in_hunk = False
-    for line in diff_text.splitlines():
-        if line.startswith("@@"):
-            in_hunk = True
-            continue
-        if line.startswith(("--- ", "+++ ", "diff ", "index ", "new file", "deleted file", "rename ", "similarity ")):
-            in_hunk = False
-            continue
-        if not in_hunk:
-            continue
-        if line[:1] in ("+", "-"):
-            yield line[0], line[1:]
+    """Yield (marker, content) for every +/- line the applier would act on.
+
+    This delegates to the applier's own parser rather than re-deriving hunk
+    boundaries. The two MUST agree: any line the guard does not see is a line
+    the guard cannot reject, and ``patcher`` deliberately tolerates hunks with
+    no ``@@`` header. A guard with a stricter parser than the applier is a
+    bypass, not a defense.
+    """
+    from .patcher import _hunks, _sections  # local import: patcher imports repo
+
+    for _old, _new, body in _sections(diff_text):
+        for hunk in _hunks(body):
+            for marker, text in hunk:
+                if marker in ("+", "-"):
+                    yield marker, text
 
 
 def assert_no_annotation_lines(diff_text: str) -> None:

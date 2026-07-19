@@ -44,6 +44,25 @@ class StubChecks:
         return CheckResult(self._ok, self._output)
 
 
+def ensure_stig_dir(root: str) -> str:
+    """Create ``.stig/`` as a self-ignoring directory and return its path.
+
+    Everything under ``.stig`` is a derived artifact — the venv, its manifest
+    hash — not working state, so none of it belongs in the medium. Commits stage
+    with ``git add -A``, so without the nested ``.gitignore`` the first
+    activation would commit an entire venv into the user's history. Being
+    ignored also means ``git clean -fd`` on a failed activation leaves it alone
+    instead of forcing a rebuild every time.
+    """
+    stig_dir = os.path.join(root, ".stig")
+    os.makedirs(stig_dir, exist_ok=True)
+    gitignore = os.path.join(stig_dir, ".gitignore")
+    if not os.path.exists(gitignore):
+        with open(gitignore, "w", encoding="utf-8") as fh:
+            fh.write("*\n")
+    return stig_dir
+
+
 def _manifest_hash(root: str) -> str:
     parts: list[str] = []
     for name in MANIFEST_FILES:
@@ -66,8 +85,7 @@ class RealChecks:
         return os.path.join(base, "Scripts" if os.name == "nt" else "bin", exe)
 
     def _ensure_venv(self, root: str) -> tuple[bool, str]:
-        stig_dir = os.path.join(root, ".stig")
-        os.makedirs(stig_dir, exist_ok=True)
+        stig_dir = ensure_stig_dir(root)
         hash_path = os.path.join(stig_dir, "venv.hash")
         current = _manifest_hash(root)
         stored = ""

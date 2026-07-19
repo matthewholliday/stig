@@ -280,12 +280,243 @@ def test_new_annotation_status_normalized(workrepo):
 
 def test_budget_exhaustion(workrepo):
     repo, git = workrepo
-    stub = "# @goal(g01, status=open): never satisfied\ndef f():\n    return 0\n"
+    # Each activation makes real progress (a distinct diff), so only the budget
+    # stops the loop — nothing else would.
+    stub = "# @goal(g01, status=open): never finished\ndef f():\n    return 0\n"
     repo.write("m.py", stub)
     git.commit("human: seed")
-    # Handler never sets satisfied and produces no diff -> loops forever w/o budget.
-    responses = [handler_json(updates=[]) for _ in range(10)]
+    responses = [
+        handler_json(diff=git_diff(repo, "m.py", stub.replace("return 0", f"return {n}")))
+        for n in range(1, 11)
+    ]
     sched, repo, git = make_sched(workrepo, responses, budget=3)
     outcome = sched.run()
     assert outcome.code == "budget"
     assert outcome.activations == 3
+
+
+def test_no_progress_activation_strikes_out_instead_of_spinning(workrepo):
+    """SPEC §06 termination: an activation that changes nothing leaves the repo
+    identical and the annotation actionable, so it would be picked forever. It
+    must take a strike and eventually leave the actionable set."""
+    repo, git = workrepo
+    repo.write("m.py", "# @goal(g01, status=open): never satisfied\ndef f():\n    return 0\n")
+    git.commit("human: seed")
+    responses = [handler_json(updates=[]) for _ in range(10)]
+    sched, repo, git = make_sched(workrepo, responses, budget=50)
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"  # terminated without touching the budget
+    g01 = annotation(repo, "g01")
+    assert g01.status == "stuck"
+    assert g01.strikes == 3
+
+
+def test_malformed_model_response_is_a_strike_not_a_crash(workrepo):
+    """SPEC §11: a response that fails the output contract is an ordinary failed
+    activation. It must never abort the loop."""
+    repo, git = workrepo
+    repo.write("m.py", "# @goal(g01, status=open): do it\ndef f():\n    return 0\n")
+    git.commit("human: seed")
+    sched, repo, git = make_sched(workrepo, ["I refuse to emit JSON." for _ in range(5)])
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"
+    assert annotation(repo, "g01").status == "stuck"
+
+
+def test_diff_containing_braces_parses(workrepo):
+    """A diff value full of braces and quotes must not defeat the JSON scan."""
+    repo, git = workrepo
+    stub = "# @goal(g01, status=open): add a dict\ndef f():\n    return 0\n"
+    repo.write("m.py", stub)
+    git.commit("human: seed")
+    new = stub.replace('    return 0', '    d = {"k": [1, 2]}\n    return d')
+    resp = handler_json(
+        diff=git_diff(repo, "m.py", new), updates=[{"id": "g01", "status": "satisfied"}]
+    )
+    sched, repo, git = make_sched(workrepo, [resp])
+    outcome = sched.run()
+
+    assert outcome.code == "fixpoint"
+    assert '"k": [1, 2]' in repo.read("m.py")
+
+
+def test_unresolved_answer_is_written_into_the_body(workrepo):
+    """SPEC §05: the answer only survives if it lands in the medium."""
+    repo, git = workrepo
+    repo.write("q.py", "# @unresolved(u01, status=open): which db?\nx = 1\n")
+    git.commit("human: seed")
+    resp = handler_json(
+        updates=[{"id": "u01", "status": "answered", "body": "which db? sqlite — see d01"}]
+    )
+    sched, repo, git = make_sched(workrepo, [resp])
+    outcome = sched.run()
+
+    assert outcome.code == "fixpoint"
+    u01 = annotation(repo, "u01")
+    assert u01.status == "answered"
+    assert "sqlite" in u01.full_body
+
+
+def test_strike_cap_applies_to_constraints_and_questions(workrepo):
+    """SPEC §11: every actionable kind needs a cap status, or the loop never
+    terminates for that kind."""
+    repo, git = workrepo
+    repo.write("db.py", "# @constraint(c01, status=asserted): holds\ndef f():\n    return []\n")
+    git.commit("human: seed")
+    sched, repo, git = make_sched(workrepo, [handler_json(updates=[]) for _ in range(10)])
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"
+    c01 = annotation(repo, "c01")
+    assert c01.status == "violated"
+    assert c01.strikes == 3
+
+
+def test_dry_run_writes_nothing(workrepo):
+    """SPEC §12: --dry-run reports the pick; it must not mint IDs or demote."""
+    repo, git = workrepo
+    repo.write("m.py", "# @goal(, status=open): needs an ID\ndef f():\n    return 0\n")
+    git.commit("human: seed")
+    before = repo.read("m.py")
+
+    sched, repo, git = make_sched(workrepo, [])
+    outcome = sched.run(dry_run=True)
+
+    assert outcome.code == "dry-run"
+    assert "g01" in outcome.report  # the in-memory ID shows up in the report
+    assert repo.read("m.py") == before  # ...but was never written to disk
+    assert not git.has_uncommitted_changes()
+
+
+def test_trust_skips_the_check_suite(workrepo):
+    """SPEC §12: --trust accepts the diff without pytest/ruff arbitration."""
+    repo, git = workrepo
+    stub = "# @goal(g01, status=open): implement\ndef f():\n    return 0\n"
+    repo.write("m.py", stub)
+    git.commit("human: seed")
+    diff = git_diff(repo, "m.py", stub.replace("return 0", "return 1"))
+    resp = handler_json(diff=diff, updates=[{"id": "g01", "status": "satisfied"}])
+
+    # Checks would fail; --trust means they never run.
+    sched, repo, git = make_sched(workrepo, [resp], checks=StubChecks(ok=False), trust=True)
+    outcome = sched.run()
+
+    assert outcome.code == "fixpoint"
+    assert annotation(repo, "g01").status == "satisfied"
+    assert "return 1" in repo.read("m.py")
+
+
+def test_failed_first_activation_keeps_minted_id(workrepo):
+    """The revert on failure must not lose the ID minted this same iteration —
+    the strike has to land on the right annotation."""
+    repo, git = workrepo
+    stub = "# @goal(, status=open): no ID yet\ndef f():\n    return 0\n"
+    repo.write("m.py", stub)
+    git.commit("human: seed")
+    diff = git_diff(repo, "m.py", stub.replace("return 0", "return 1"))
+
+    sched, repo, git = make_sched(
+        workrepo, [handler_json(diff=diff)], checks=StubChecks(ok=False)
+    )
+    result = sched.step()
+
+    assert result.outcome == "failed"
+    g01 = annotation(repo, "g01")
+    assert g01 is not None  # the ID survived the revert
+    assert g01.strikes == 1
+    assert "no ID yet" in g01.full_body
+
+
+def test_stale_demoted_constraint_still_reaches_its_strike_cap(workrepo):
+    """The revert on failure undoes the staleness demotion `_prepare` wrote. If
+    it is not redone, the constraint is back at `verified`, never matches its cap
+    status, and accrues strikes until the budget runs out."""
+    repo, git = workrepo
+    repo.write(
+        "db.py",
+        "# @constraint(c01, status=verified, region_hash=deadbeef0000): holds\n"
+        "def f():\n    return []\n",
+    )
+    git.commit("human: seed")
+    sched, repo, git = make_sched(
+        workrepo, [handler_json(updates=[]) for _ in range(20)], budget=20
+    )
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"  # not "budget"
+    c01 = annotation(repo, "c01")
+    assert c01.status == "violated"
+    assert c01.strikes == 3
+
+
+def test_reopened_goal_gets_a_full_set_of_fresh_attempts(workrepo):
+    """The revert also undoes the human-reopen strike reset. Without redoing it,
+    a reopened goal goes 3 → 4 and is stuck again after a single activation."""
+    repo, git = workrepo
+    stub = "# @goal(g01, status=open, strikes=3): reopened by hand\ndef f():\n    return 0\n"
+    repo.write("m.py", stub)
+    git.commit("human: reopen")
+    diffs = [
+        git_diff(repo, "m.py", stub.replace("return 0", f"return {n}")) for n in (1, 2, 3)
+    ]
+    sched, repo, git = make_sched(
+        workrepo, [handler_json(diff=d) for d in diffs], checks=StubChecks(ok=False)
+    )
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"
+    g01 = annotation(repo, "g01")
+    assert g01.status == "stuck"
+    assert g01.strikes == 3  # three fresh attempts, not one
+
+
+def test_restating_the_current_status_is_not_progress(workrepo):
+    """Re-asserting a value the annotation already holds must not buy another
+    activation, or the no-progress strike never fires."""
+    repo, git = workrepo
+    repo.write("m.py", "# @goal(g01, status=open): do it\ndef f():\n    return 0\n")
+    git.commit("human: seed")
+    responses = [
+        handler_json(diff="\n", updates=[{"id": "g01", "status": "open",
+                                          "attrs": {"nope": ""}}])
+        for _ in range(10)
+    ]
+    sched, repo, git = make_sched(workrepo, responses, budget=20)
+    outcome = sched.run()
+
+    assert outcome.code == "blocked"
+    assert annotation(repo, "g01").status == "stuck"
+
+
+def test_kill_and_resume_is_equivalent_to_an_uninterrupted_run(workrepo):
+    """SPEC §13: state lives only in the repo, so a killed run resumes from the
+    repository alone — the scheduler object carries nothing across iterations."""
+    repo, git = workrepo
+    src = "# @goal(g01, status=open): first\ndef a():\n    return 0\n"
+    repo.write("m.py", src)
+    repo.write(
+        "n.py", "# @goal(g02, status=open, after=g01): second\ndef b():\n    return 0\n"
+    )
+    git.commit("human: seed")
+
+    r1 = handler_json(
+        diff=git_diff(repo, "m.py", src.replace("return 0", "return 1")),
+        updates=[{"id": "g01", "status": "satisfied"}],
+    )
+    r2 = handler_json(updates=[{"id": "g02", "status": "satisfied"}])
+
+    # One activation, then throw the scheduler away entirely (the "kill").
+    sched, repo, git = make_sched(workrepo, [r1])
+    sched.step()
+    del sched
+
+    # A brand-new scheduler, with no memory of the first, finishes the job.
+    resumed, repo, git = make_sched(workrepo, [r2])
+    outcome = resumed.run()
+
+    assert outcome.code == "fixpoint"
+    assert annotation(repo, "g01").status == "satisfied"
+    assert annotation(repo, "g02").status == "satisfied"
+    assert "return 1" in repo.read("m.py")

@@ -10,6 +10,7 @@ so tolerance here never lets a diff rewrite annotation lines.
 
 from __future__ import annotations
 
+from .annotations import AnnotationTouchError, annotation_lines
 from .repo import Repo
 
 
@@ -96,8 +97,10 @@ def _find(haystack: list[str], needle: list[str], start: int) -> int:
 
 def _apply_to_file(original: str, hunks: list[list[tuple[str, str]]]) -> str:
     lines = original.split("\n")
-    trailing_nl = original.endswith("\n")
-    if trailing_nl:
+    # An empty original is a file being written from nothing: end it with a
+    # newline like any normal file, rather than inheriting "" has no newline.
+    trailing_nl = original.endswith("\n") or original == ""
+    if original.endswith("\n"):
         lines = lines[:-1]  # drop the empty element from the final newline
     search = 0
     for hunk in hunks:
@@ -112,30 +115,75 @@ def _apply_to_file(original: str, hunks: list[list[tuple[str, str]]]) -> str:
         lines[idx : idx + len(old)] = new
         search = idx + len(new)
     text = "\n".join(lines)
-    if trailing_nl or not text.endswith("\n"):
+    if trailing_nl:
         text += "\n"
     return text
 
 
+def _assert_annotations_unchanged(repo: Repo, path: str, new_text: str | None) -> None:
+    """The diff channel is for code only (SPEC §07).
+
+    Enforced by comparing the file's annotation lines before and after, rather
+    than by inspecting diff markers. Marker inspection is necessarily partial —
+    a whole-file overwrite, a deletion, or an unmarked line never carries a
+    ``+``/``-`` — and a guard that is partial is a bypass. ``new_text=None``
+    means the file is being deleted.
+    """
+    before = annotation_lines(repo.read(path)) if repo.exists(path) else []
+    after = annotation_lines(new_text) if new_text is not None else []
+    if before == after:
+        return
+    differing = [ln for ln in before if ln not in after] + [
+        ln for ln in after if ln not in before
+    ]
+    what = repr(differing[0].strip()) if differing else "annotation order"
+    raise AnnotationTouchError(
+        f"diff channel may not add, modify, or delete annotation lines in {path}: {what}"
+    )
+
+
 def apply_diff(repo: Repo, diff_text: str) -> list[str]:
-    """Apply a unified diff to the repo. Returns changed paths; raises PatchError."""
+    """Apply a unified diff to the repo. Returns changed paths.
+
+    Raises PatchError if a hunk will not apply, or AnnotationTouchError if the
+    diff would alter any annotation line.
+    """
     if not diff_text.strip():
         return []
-    changed: list[str] = []
     sections = list(_sections(diff_text))
     if not sections:
         raise PatchError("no file sections found in diff")
+
+    # Resolve every section to its full resulting content first, check them all,
+    # and only then write: a diff is applied whole or not at all, so a rejected
+    # third section cannot leave the first two on disk.
+    planned: list[tuple[str, str | None]] = []
     for old_path, new_path, body in sections:
-        path = new_path or old_path
-        if path is None:
+        if new_path is None and old_path is None:
             raise PatchError("diff section has no target path")
+        if new_path is None:  # deletion: `+++ /dev/null`
+            planned.append((old_path, None))
+            continue
+        path = new_path
         hunks = _hunks(body)
-        if old_path is None:  # new file
+        if old_path is None:  # new file: `--- /dev/null`
+            if repo.exists(path):
+                raise PatchError(f"diff creates {path}, but it already exists")
             _, new_lines = _blocks([m for h in hunks for m in h])
             content = "\n".join(new_lines)
-            repo.write(path, content + "\n" if not content.endswith("\n") else content)
+            planned.append((path, content if content.endswith("\n") else content + "\n"))
         else:
             original = repo.read(path) if repo.exists(path) else ""
-            repo.write(path, _apply_to_file(original, hunks))
+            planned.append((path, _apply_to_file(original, hunks)))
+
+    for path, new_text in planned:
+        _assert_annotations_unchanged(repo, path, new_text)
+
+    changed: list[str] = []
+    for path, new_text in planned:
+        if new_text is None:
+            repo.delete_file(path)
+        else:
+            repo.write(path, new_text)
         changed.append(path)
     return changed

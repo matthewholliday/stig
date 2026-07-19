@@ -79,22 +79,61 @@ def extract_json(text: str) -> dict:
     Accepts a ```json fenced block or a bare object. Only the structured
     channel is acted upon; free-text reasoning around it is ignored (SPEC §07).
     """
-    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fence:
-        return json.loads(fence.group(1))
-    # Fall back to the last balanced top-level object in the text.
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    for candidate in (fence.group(1) if fence else None, text.strip()):
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+        # Valid JSON but the wrong shape (commonly a bare array of updates).
+        # Refusing here matters: scanning on would find the first `{` *inside*
+        # the array and silently return one element as the whole response.
+        raise ValueError(f"structured channel is a JSON {type(parsed).__name__}, not an object")
+
     start = text.find("{")
     while start != -1:
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        break
+        end = _balanced_end(text, start)
+        if end is not None:
+            try:
+                parsed = json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
         start = text.find("{", start + 1)
     raise ValueError("no JSON object found in model response")
+
+
+def _balanced_end(text: str, start: int) -> int | None:
+    """Index of the ``}`` closing the object opened at ``start``, or None.
+
+    Brace counting MUST respect JSON string context: a handler's ``diff`` value
+    routinely contains braces (``+    d = {``) and quotes, and a scanner blind
+    to strings terminates the object early, producing invalid JSON.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
