@@ -1,5 +1,7 @@
 # Stig — a non-agentic coding system
 
+[![CI](https://github.com/matthewholliday/stig/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewholliday/stig/actions/workflows/ci.yml)
+
 > All working state lives in the repository itself — files plus git history — as
 > typed annotations. Stateless model calls fire on annotations they can act on.
 > The system terminates when nothing is actionable and nothing is blocked.
@@ -178,6 +180,12 @@ level: reaching fixpoint, kill-and-resume equivalence, co-editing, staleness
 demotion, the stuck/blocked path, and the constraint graduation relay — plus the
 CLI surface, the structured-channel parser, and the diff-guard/applier
 agreement.
+
+CI (`.github/workflows/ci.yml`) runs on every pull request: `ruff` once, the
+suite across Python 3.10–3.14, a wheel build installed into a clean environment
+and driven through the console script, and `stig check` against this repository's
+own annotations. No `ANTHROPIC_API_KEY` is provided to the test job — the suite
+is hermetic, and withholding the key is what keeps it that way.
 
 <a name="spec"></a>
 ## Specification

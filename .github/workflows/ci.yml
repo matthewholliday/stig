@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [claude/stig-spec-i4gtmh, main]
+  pull_request:
+
+# A superseded run on the same branch is wasted compute; keep only the newest.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # Ruff's verdict does not vary by interpreter, so it runs once rather than
+    # once per matrix leg.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # Pinned here but left as a range in pyproject: a new ruff release adds
+      # rules, and an unpinned linter turns an unrelated PR red for reasons its
+      # author did not cause. Bump this deliberately.
+      - run: pip install -e "." ruff==0.15.22
+      - run: ruff check stig tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject declares requires-python >=3.10; the matrix is the thing that
+        # keeps that claim honest.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+
+      # The suite builds throwaway git repos (tests/conftest.py::workrepo), and a
+      # commit fails outright without an identity. init_repo sets one per repo,
+      # but a global fallback keeps any stray `git commit` from wedging the run.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+
+      # Deliberately no ANTHROPIC_API_KEY: the suite is hermetic (scripted model
+      # + stub checks), and asserting that here is what stops a live API call
+      # from silently becoming a dependency.
+      - run: python -m pytest -q
+
+  package:
+    # A passing suite says nothing about whether the thing installs. This builds
+    # the wheel, installs it into a clean environment with no source tree on the
+    # path, and drives the console script.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install build
+      - run: python -m build --wheel --outdir dist .
+      - name: Install the wheel and smoke-test the CLI
+        run: |
+          python -m venv /tmp/wheel-env
+          /tmp/wheel-env/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/wheel-env/bin/stig --help
+          /tmp/wheel-env/bin/stig init smoke --no-commit
+          /tmp/wheel-env/bin/stig --root /tmp/smoke check
+
+  dogfood:
+    # Stig's own annotations, checked by Stig. `stig check` is parse-and-hash
+    # only — no model calls — and exits 1 on grammar errors, duplicate IDs, or a
+    # verification gone stale against the region it verified.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e .
+      - run: stig check
