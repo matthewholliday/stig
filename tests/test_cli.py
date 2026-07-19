@@ -179,3 +179,88 @@ def test_root_flag_targets_another_directory(workrepo, tmp_path_factory, monkeyp
     monkeypatch.chdir(tmp_path_factory.mktemp("elsewhere"))
     assert main(["--root", repo.root, "status"]) == 0
     assert "g01" in capsys.readouterr().out
+
+
+# -- init -------------------------------------------------------------------
+
+def test_init_scaffolds_a_runnable_project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "tempo"]) == 0
+    root = tmp_path / "tempo"
+    for rel in ("pyproject.toml", "ARCHITECTURE.anno", "tempo/__init__.py", "tests/__init__.py"):
+        assert (root / rel).exists(), rel
+    assert (root / ".git").is_dir()
+    assert 'name = "tempo"' in (root / "pyproject.toml").read_text()
+
+
+def test_init_commits_so_the_dirty_guard_passes(tmp_path, monkeypatch):
+    """A scaffold left uncommitted is exactly what `stig run` refuses to touch."""
+    monkeypatch.chdir(tmp_path)
+    main(["init", "tempo"])
+    from stig.gitutil import Git
+    assert not Git(str(tmp_path / "tempo")).has_uncommitted_changes()
+
+
+def test_init_no_commit_leaves_the_tree_dirty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    main(["init", "tempo", "--no-commit"])
+    from stig.gitutil import Git
+    assert Git(str(tmp_path / "tempo")).has_uncommitted_changes()
+
+
+def test_init_never_clobbers_existing_files(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "legacy"
+    root.mkdir()
+    (root / "pyproject.toml").write_text('[project]\nname = "mine"\n')
+    (root / "ARCHITECTURE.anno").write_text("# @goal(g07, status=open): keep me\n")
+    assert main(["init", "legacy"]) == 0
+    assert (root / "pyproject.toml").read_text() == '[project]\nname = "mine"\n'
+    assert "keep me" in (root / "ARCHITECTURE.anno").read_text()
+
+
+def test_init_is_idempotent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "tempo"]) == 0
+    before = (tmp_path / "tempo" / "ARCHITECTURE.anno").read_text()
+    assert main(["init", "tempo"]) == 0
+    assert (tmp_path / "tempo" / "ARCHITECTURE.anno").read_text() == before
+
+
+def test_init_template_guidance_is_not_itself_actionable(tmp_path, monkeypatch):
+    """A '# @goal' example in the template would be a goal the scheduler runs.
+
+    The only annotation a fresh scaffold may contain is the layout @decision,
+    which is terminal and never actionable.
+    """
+    monkeypatch.chdir(tmp_path)
+    main(["init", "tempo"])
+    from stig.repo import Repo
+    kinds = [a.kind for a in Repo(str(tmp_path / "tempo")).parse_all()]
+    assert kinds == ["decision"]
+
+
+def test_init_records_the_layout_so_handlers_cannot_shadow_the_package(tmp_path, monkeypatch):
+    """Regression: handlers wrote `<pkg>.py` beside the scaffolded `<pkg>/`.
+
+    The empty package won every import, so downstream goals ran against a module
+    whose contents had silently vanished.
+    """
+    monkeypatch.chdir(tmp_path)
+    main(["init", "tempo"])
+    from stig.repo import Repo
+    decision = Repo(str(tmp_path / "tempo")).parse_all()[0]
+    assert decision.kind == "decision"
+    assert "tempo/" in decision.full_body and "shadow" in decision.full_body
+
+
+def test_init_derives_a_valid_package_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "my-cool.tool"]) == 0
+    assert (tmp_path / "my-cool.tool" / "my_cool_tool" / "__init__.py").exists()
+
+
+def test_init_package_override(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "proj", "--package", "core"]) == 0
+    assert (tmp_path / "proj" / "core" / "__init__.py").exists()

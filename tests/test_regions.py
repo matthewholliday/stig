@@ -1,5 +1,7 @@
 from stig.annotations import parse_file
 from stig.regions import (
+    enforcing_test_exists,
+    missing_enforcing_tests,
     region_has_executable_lines,
     region_hash,
     repo_structure_hash,
@@ -67,3 +69,31 @@ def test_repo_structure_hash_changes_on_new_import():
     h3 = repo_structure_hash(files)
     files["a.py"] = "import os\nimport sys\nx = 2\n"
     assert repo_structure_hash(files) == h3
+
+
+ENFORCING = {
+    "tests/test_a.py": "def test_one():\n    pass\n",
+    "tests/test_b.py": "def test_two():\n    pass\n",
+}
+
+
+def test_enforced_by_accepts_several_tests():
+    assert enforcing_test_exists("test_one&test_two", ENFORCING)
+
+
+def test_enforced_by_is_all_or_nothing():
+    """A conjunction is only enforced if every named test exists."""
+    assert not enforcing_test_exists("test_one&test_missing", ENFORCING)
+
+
+def test_enforced_by_single_name_still_works():
+    assert enforcing_test_exists("test_one", ENFORCING)
+    assert enforcing_test_exists("tests/test_a.py::test_one", ENFORCING)
+    assert not enforcing_test_exists("", ENFORCING)
+
+
+def test_missing_enforcing_tests_names_the_culprit():
+    """Errors should name the absent test, not echo the whole &-joined list."""
+    assert missing_enforcing_tests("test_one&test_two", ENFORCING) == []
+    assert missing_enforcing_tests("test_one&test_gone", ENFORCING) == ["test_gone"]
+    assert missing_enforcing_tests("a&b", ENFORCING) == ["a", "b"]

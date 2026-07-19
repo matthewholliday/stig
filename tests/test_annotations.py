@@ -59,3 +59,33 @@ def test_strikes_view():
     assert a.strikes == 2
     a.strikes = 3
     assert a.attrs["strikes"] == "3"
+
+
+def test_header_text_round_trips_delimiter_bearing_attrs():
+    """Rendering must never produce a header this module cannot parse.
+
+    Regression: a handler set ``enforced_by`` to a comma-separated list of test
+    names. The comma parsed as the start of a second attribute, so every later
+    parse_repo() raised GrammarError and no stig command could run until a human
+    edited the file by hand.
+    """
+    for value in ["a, b", "a)b", "a(b", "multi\nline   value", "x, y, z"]:
+        a = parse_file("# @goal(g01, status=open): body\n", "x.py")[0]
+        a.attrs["enforced_by"] = value
+        rendered = a.header_text()
+        reparsed = parse_file(rendered, "x.py")
+        assert len(reparsed) == 1, f"{value!r} rendered an unparseable header: {rendered}"
+        # And rendering the reparsed annotation is a fixpoint.
+        assert parse_file(reparsed[0].header_text(), "x.py")[0].attrs == reparsed[0].attrs
+
+
+def test_comma_in_attr_folds_onto_the_and_separator():
+    a = parse_file("# @goal(g01, status=open): body\n", "x.py")[0]
+    a.attrs["enforced_by"] = "test_one, test_two"
+    assert parse_file(a.header_text(), "x.py")[0].attrs["enforced_by"] == "test_one&test_two"
+
+
+def test_malformed_attr_key_cannot_escape_the_grammar():
+    a = parse_file("# @goal(g01, status=open): body\n", "x.py")[0]
+    a.attrs["bad key,x"] = "v"
+    assert len(parse_file(a.header_text(), "x.py")) == 1

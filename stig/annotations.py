@@ -64,6 +64,35 @@ class GrammarError(ValueError):
     """A line looked like an annotation but violated the grammar."""
 
 
+# The delimiters of the ``(<id>[, key=value]*)`` header. A value containing any
+# of them renders a line that this module's own parser rejects, which wedges the
+# medium: every subsequent parse_repo() raises and no command can run until a
+# human edits the file. ``&`` is the established separator for multi-valued
+# attributes (``after=g01&c04``), so a comma — the way a model naturally writes
+# a list — is folded onto it rather than dropped.
+_ATTR_SUBSTITUTIONS = {",": "&", "(": "", ")": ""}
+
+
+def sanitize_attr_value(value: str) -> str:
+    """Coerce an attribute value into something the grammar can round-trip.
+
+    Applied at render time so that writing an unparseable header is structurally
+    impossible rather than merely unlikely: handlers, the scheduler, and humans
+    all reach the medium through ``header_text()``.
+    """
+    text = " ".join(str(value).split())
+    for bad, replacement in _ATTR_SUBSTITUTIONS.items():
+        text = text.replace(bad, replacement)
+    # Collapse the spacing a folded ``, `` leaves behind, so the separator reads
+    # the same whether a model wrote ``a&b`` or ``a, b``.
+    return re.sub(r"\s*&\s*", "&", text).strip("&")
+
+
+def sanitize_attr_key(key: str) -> str:
+    """Keys share the value delimiters, and additionally cannot contain ``=``."""
+    return sanitize_attr_value(key).replace("=", "").replace(" ", "_")
+
+
 class AnnotationTouchError(ValueError):
     """The diff channel tried to add, modify, or delete an annotation line.
 
@@ -126,7 +155,7 @@ class Annotation:
         """Render the header line (without trailing newline)."""
         inside = self.id or ""
         for key, value in self.attrs.items():
-            inside += f", {key}={value}"
+            inside += f", {sanitize_attr_key(key)}={sanitize_attr_value(value)}"
         body = self.body
         if body and not body.startswith(" "):
             body = " " + body

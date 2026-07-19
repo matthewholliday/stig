@@ -1,5 +1,7 @@
 # Stig — a non-agentic coding system
 
+[![CI](https://github.com/matthewholliday/stig/actions/workflows/ci.yml/badge.svg)](https://github.com/matthewholliday/stig/actions/workflows/ci.yml)
+
 > All working state lives in the repository itself — files plus git history — as
 > typed annotations. Stateless model calls fire on annotations they can act on.
 > The system terminates when nothing is actionable and nothing is blocked.
@@ -66,6 +68,7 @@ root-level `ARCHITECTURE.anno` file holds repo-scoped annotations.
 ## CLI (SPEC §12)
 
 ```
+stig init [name] [--package P] [--seed "<prompt>"]      # scaffold a ready-to-run project
 stig run [--budget N] [--dry-run] [--trust] [--adopt]   # loop to fixpoint, blocked, or budget
 stig step [--trust] [--adopt]                            # exactly one activation
 stig status                                              # every annotation, status, strikes
@@ -86,12 +89,20 @@ than a manifest-derived venv).
 | `--adopt` | commit pre-existing uncommitted changes as human changes instead of refusing to run |
 | `--all` | widen `strip` to every goal and question regardless of status. `@decision` and `@tried` are the permanent record; `--all` does not touch them |
 | `--archive` | relocate `@tried` of satisfied goals into `ARCHITECTURE.anno` instead of deleting them |
+| `--package P` | `init`: package directory name (default: derived from the project directory) |
+| `--seed "<prompt>"` | `init`: also draft initial goals, so one command yields a runnable project |
+| `--no-commit` | `init`: scaffold but leave the tree uncommitted |
 
 `stig step` and `stig run` produce identical per-activation behavior; run is just
 step in a loop.
 
 A goal may depend on several annotations at once: `after=g02&c04` activates only
-once every named annotation has reached a terminal success status.
+once every named annotation has reached a terminal success status. `&` is the
+separator for every multi-valued attribute — a conjunctive constraint names its
+tests the same way: `enforced_by=test_lower_bound&test_raises_value_error`.
+Enforcement is all-or-nothing: if any named test is missing, the constraint
+demotes to `asserted`. Attribute values are sanitized when written, so a comma
+folds onto `&` rather than rendering a header the parser would reject.
 
 ## How one activation works (SPEC §06)
 
@@ -160,7 +171,7 @@ loop:
 ## Tests
 
 ```bash
-python -m pytest -q      # 99 tests, hermetic (scripted model + stub checks)
+python -m pytest -q      # 115 tests, hermetic (scripted model + stub checks)
 python -m ruff check stig tests
 ```
 
@@ -169,6 +180,12 @@ level: reaching fixpoint, kill-and-resume equivalence, co-editing, staleness
 demotion, the stuck/blocked path, and the constraint graduation relay — plus the
 CLI surface, the structured-channel parser, and the diff-guard/applier
 agreement.
+
+CI (`.github/workflows/ci.yml`) runs on every pull request: `ruff` once, the
+suite across Python 3.10–3.14, a wheel build installed into a clean environment
+and driven through the console script, and `stig check` against this repository's
+own annotations. No `ANTHROPIC_API_KEY` is provided to the test job — the suite
+is hermetic, and withholding the key is what keeps it that way.
 
 <a name="spec"></a>
 ## Specification
