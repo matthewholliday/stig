@@ -149,16 +149,35 @@ def region_has_executable_lines(ann: Annotation, file_text: str) -> bool:
 
 
 def enforcing_test_exists(enforced_by: str, py_files: dict[str, str]) -> bool:
-    """True if the test named by an ``enforced_by=`` reference is defined (SPEC §09).
+    """True if every test named by an ``enforced_by=`` reference is defined (SPEC §09).
 
     Shared by ``stig check`` and the scheduler's staleness demotion so the two
     can never reach opposite conclusions about the same annotation.
+
+    A constraint whose body is a conjunction often needs more than one test, so
+    ``enforced_by`` accepts an ``&``-separated list — the same separator
+    ``after=`` uses. Enforcement is all-or-nothing: if any named test is missing,
+    part of the invariant is unguarded and the constraint demotes.
     """
-    name = enforced_by.split("::")[-1].strip()
-    if not name:
-        return False
-    pattern = re.compile(rf"def\s+{re.escape(name)}\b")
-    return any(pattern.search(text) for text in py_files.values())
+    names = enforcing_test_names(enforced_by)
+    return bool(names) and not missing_enforcing_tests(enforced_by, py_files)
+
+
+def enforcing_test_names(enforced_by: str) -> list[str]:
+    """The bare test names an ``enforced_by=`` reference points at."""
+    names = [n.split("::")[-1].strip() for n in enforced_by.split("&")]
+    return [n for n in names if n]
+
+
+def missing_enforcing_tests(enforced_by: str, py_files: dict[str, str]) -> list[str]:
+    """Which named tests are absent — so errors can name the culprit, not the list."""
+    return [
+        name
+        for name in enforcing_test_names(enforced_by)
+        if not any(
+            re.compile(rf"def\s+{re.escape(name)}\b").search(text) for text in py_files.values()
+        )
+    ]
 
 
 def repo_structure_hash(files: dict[str, str]) -> str:

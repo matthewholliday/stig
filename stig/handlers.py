@@ -133,7 +133,8 @@ def goal_handler(active: Annotation, ctx: Context, model: Model) -> HandlerResul
         "propose @decision, @unresolved, or @constraint annotations. If a "
         "graduation @goal asks you to write a test enforcing a constraint, write "
         "the test and set `enforced_by=<test id>` on that constraint via a status "
-        "update (its status stays unchanged; enforced_by is provisional).\n\n"
+        "update (its status stays unchanged; enforced_by is provisional). To name "
+        "several tests, separate them with `&` — never a comma.\n\n"
         + _OUTPUT_CONTRACT
     )
     user = f"{ctx.text}\n\n### TASK\nSatisfy goal {active.id}: {active.full_body}"
@@ -149,7 +150,8 @@ def constraint_handler(active: Annotation, ctx: Context, model: Model) -> Handle
         "`violated` if it does not. On violation, propose a repair @goal. If the "
         "check is mechanizable, propose a graduation @goal: 'write a pytest test "
         "enforcing <id>.' If the constraint already carries `enforced_by`, review "
-        "that test against the constraint body: if faithful set status `enforced`; "
+        "those tests against the constraint body (`enforced_by` may name several, "
+        "separated by `&` — never a comma): if faithful set status `enforced`; "
         "if vacuous or off-target set status `violated`, clear enforced_by "
         "(attrs enforced_by=), and propose a repair @goal. Generator writes, "
         "verifier grades — for enforcement code too.\n\n" + _OUTPUT_CONTRACT
