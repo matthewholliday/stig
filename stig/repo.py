@@ -18,6 +18,10 @@ class DuplicateIDError(ValueError):
     """Two annotations share an ID — a grammar error (SPEC §04)."""
 
 
+class PathEscapeError(ValueError):
+    """A path from the diff channel pointed outside the repository."""
+
+
 class Repo:
     def __init__(self, root: str):
         self.root = os.path.abspath(root)
@@ -25,7 +29,16 @@ class Repo:
     # -- paths ---------------------------------------------------------------
 
     def path(self, rel: str) -> str:
-        return os.path.join(self.root, rel)
+        """Resolve a repo-relative path, refusing anything outside the root.
+
+        Paths in a diff come from the model and are untrusted: ``os.path.join``
+        honors an absolute path and happily walks up through ``..``, so without
+        this a diff could read, overwrite, or delete files anywhere on disk.
+        """
+        full = os.path.normpath(os.path.join(self.root, rel))
+        if full != self.root and not full.startswith(self.root + os.sep):
+            raise PathEscapeError(f"path {rel!r} resolves outside the repository")
+        return full
 
     def source_paths(self) -> list[str]:
         """Repo-relative paths that may carry annotations (.py + ARCHITECTURE)."""
@@ -144,6 +157,11 @@ class Repo:
             text += "\n"
         text += "".join(ln + "\n" for ln in new_lines)
         self.write(rel, text)
+
+    def delete_file(self, rel: str) -> None:
+        full = self.path(rel)
+        if os.path.exists(full):
+            os.remove(full)
 
     def delete_range(self, rel: str, start: int, end: int) -> None:
         lines = self.read(rel).splitlines(keepends=True)

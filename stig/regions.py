@@ -148,6 +148,19 @@ def region_has_executable_lines(ann: Annotation, file_text: str) -> bool:
     return False
 
 
+def enforcing_test_exists(enforced_by: str, py_files: dict[str, str]) -> bool:
+    """True if the test named by an ``enforced_by=`` reference is defined (SPEC §09).
+
+    Shared by ``stig check`` and the scheduler's staleness demotion so the two
+    can never reach opposite conclusions about the same annotation.
+    """
+    name = enforced_by.split("::")[-1].strip()
+    if not name:
+        return False
+    pattern = re.compile(rf"def\s+{re.escape(name)}\b")
+    return any(pattern.search(text) for text in py_files.values())
+
+
 def repo_structure_hash(files: dict[str, str]) -> str:
     """Hash of the sorted set of (file path, import statements) pairs (SPEC §09).
 

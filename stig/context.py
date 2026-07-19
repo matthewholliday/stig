@@ -54,12 +54,16 @@ class ContextBuilder:
         py_files = {p: t for p, t in files.items() if p.endswith(".py")}
         graph = ImportGraph(py_files)
 
-        snapshot: dict[str, str] = {}
+        # Hashes are recorded for every file *read*, but the snapshot only keeps
+        # the ones that survive budget trimming into the final prompt: the race
+        # check exists to catch edits to state the model actually reasoned about,
+        # and snapshotting a trimmed-away file discards activations for nothing.
+        hashes: dict[str, str] = {}
         sections: list[str] = []
 
         def read_in(path: str) -> str:
             text = files.get(path, "")
-            snapshot[path] = _hash(text)
+            hashes[path] = _hash(text)
             return text
 
         # Item 1 (MUST): the annotation itself and its full containing file.
@@ -78,9 +82,9 @@ class ContextBuilder:
             hop_files = sorted(
                 graph.direct_imports(active.file) | graph.direct_importers(active.file)
             )
-        hop_section: list[str] = []
+        hop_section: list[tuple[str, str]] = []  # (path, rendered section)
         for path in hop_files:
-            hop_section.append(f"### RELATED FILE: {path}\n{read_in(path)}")
+            hop_section.append((path, f"### RELATED FILE: {path}\n{read_in(path)}"))
 
         # Item 3 (MUST, never dropped): all @decision bodies + all ARCHITECTURE,
         # plus relevance-scoped @tried (active file, or goal= names active id).
@@ -122,14 +126,21 @@ class ContextBuilder:
         must = "\n\n".join(sections + [item3_section])
         remaining = self.char_budget - len(must)
         if remaining > len(map_section):
-            hop_and_map = hop_section + [map_section]
+            hop_and_map = hop_section + [(None, map_section)]
         else:
             hop_and_map = list(hop_section)  # drop item 4
         # Trim item 2 by import distance (arbitrary but deterministic: last first).
-        while hop_and_map and len(must) + len("\n\n".join(hop_and_map)) > self.char_budget:
+        while hop_and_map and (
+            len(must) + len("\n\n".join(s for _p, s in hop_and_map)) > self.char_budget
+        ):
             hop_and_map.pop()
 
-        text = "\n\n".join(sections + hop_and_map + [item3_section])
+        included = {p for p, _s in hop_and_map if p} | {
+            active.file,
+            ARCHITECTURE_FILE,
+        }
+        snapshot = {p: h for p, h in hashes.items() if p in included}
+        text = "\n\n".join(sections + [s for _p, s in hop_and_map] + [item3_section])
         return Context(text=text, snapshot=snapshot, files_read=sorted(snapshot))
 
     def disk_hashes(self, snapshot: dict[str, str]) -> dict[str, str]:

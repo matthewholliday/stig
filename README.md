@@ -67,15 +67,31 @@ root-level `ARCHITECTURE.anno` file holds repo-scoped annotations.
 
 ```
 stig run [--budget N] [--dry-run] [--trust] [--adopt]   # loop to fixpoint, blocked, or budget
-stig step                                                # exactly one activation
+stig step [--trust] [--adopt]                            # exactly one activation
 stig status                                              # every annotation, status, strikes
 stig check                                               # parse + hash pass only; CI-friendly (exits 1 on staleness/dups/grammar)
 stig strip [--all] [--archive]                           # remove resolved goals/questions; keep decisions & tried
 stig seed "<prompt>"                                     # sugar: write initial @goal annotations
 ```
 
+Global flags: `--root <dir>` (default `.`), `--model <id>` (default
+`claude-opus-4-8`), `--no-venv` (run checks in the current environment rather
+than a manifest-derived venv).
+
+| Flag | Effect |
+|------|--------|
+| `--budget N` | stop after N activations (default 50) |
+| `--dry-run` | report which annotation *would* activate, then exit. Writes nothing — no ID minting, no staleness demotion, no commit |
+| `--trust` | skip the check suite; accept the model's diff without pytest/ruff arbitration. Every other gate — annotation-line guard, oscillation, patch application — still runs |
+| `--adopt` | commit pre-existing uncommitted changes as human changes instead of refusing to run |
+| `--all` | widen `strip` to every goal and question regardless of status. `@decision` and `@tried` are the permanent record; `--all` does not touch them |
+| `--archive` | relocate `@tried` of satisfied goals into `ARCHITECTURE.anno` instead of deleting them |
+
 `stig step` and `stig run` produce identical per-activation behavior; run is just
 step in a loop.
+
+A goal may depend on several annotations at once: `after=g02&c04` activates only
+once every named annotation has reached a terminal success status.
 
 ## How one activation works (SPEC §06)
 
@@ -107,6 +123,7 @@ loop:
 | `graph.py`        | §08 | cheap static import graph (one hop each way) |
 | `context.py`      | §08 | deterministic context assembly + snapshot |
 | `diffutil.py`     | §07, §11 | diff channel guard, `diff_hash` |
+| `patcher.py`      | §07 | tolerant unified-diff applier (context-matched, ignores hunk line numbers) |
 | `gitutil.py`      | §10 | one activation = one commit; history as medium |
 | `checks.py`       | §06 | pytest + ruff in a manifest-derived venv |
 | `models.py`       | §01, §07 | the transforms (Anthropic + scriptable) |
@@ -117,29 +134,46 @@ loop:
 ## Failure handling (SPEC §11)
 
 - **Loops/thrash** — a per-annotation strike cap (default 3), stored as `strikes=N`
-  on the annotation itself (never in scheduler memory). At cap, a goal becomes
-  `stuck`.
+  on the annotation itself (never in scheduler memory). At cap, each actionable
+  kind is driven out of its actionable status: a goal becomes `stuck`, a
+  constraint `violated`, a question `needs-human`.
+- **No-progress activations** — an activation that emits no diff, no accepted
+  status transition, and no new annotation leaves the repository identical and
+  the annotation still actionable. That is a strike, not a success; otherwise the
+  loop would pick the same annotation forever and never reach fixpoint.
+- **Malformed model output** — a response that fails the output contract is an
+  ordinary failed activation (revert, strike, commit), never a crash.
 - **Oscillation** — each `@tried` records `diff_hash=` of the reverted diff; a new
   diff matching a prior one is a strike without re-applying.
 - **In-flight edits** — context files are hash-snapshotted at assembly; a mismatch
   when the handler returns discards the activation with no strike and no commit.
 - **Injection** — annotation bodies are treated as data, never instructions; the
   diff channel cannot touch annotation lines; only grammar-valid status
-  transitions from the structured channel are applied.
+  transitions from the structured channel are applied. The guard is enforced by
+  comparing each file's annotation lines before and after, at the moment of
+  writing — not by inspecting `+`/`-` markers, which a whole-file overwrite, a
+  deletion, or an unmarked line slips past. Diff paths are untrusted and may not
+  escape the repository root; a diff applies whole or not at all.
 - **Human reopen** — an actionable annotation whose `strikes` is at cap implies a
   human edit; the scheduler resets `strikes=0`, keeping the `@tried` history.
 
 ## Tests
 
 ```bash
-python -m pytest -q      # 32 tests, hermetic (scripted model + stub checks)
-python -m ruff check stig
+python -m pytest -q      # 99 tests, hermetic (scripted model + stub checks)
+python -m ruff check stig tests
 ```
 
 The suite exercises the acceptance-test scenarios (SPEC §13) at the machinery
 level: reaching fixpoint, kill-and-resume equivalence, co-editing, staleness
-demotion, the stuck/blocked path, and the constraint graduation relay.
+demotion, the stuck/blocked path, and the constraint graduation relay — plus the
+CLI surface, the structured-channel parser, and the diff-guard/applier
+agreement.
 
 <a name="spec"></a>
-See the full normative specification — `SPEC-001 · Stig MVP · draft 0.3` — for the
-authoritative behavior. RFC 2119 keywords apply.
+## Specification
+
+`SPEC-001 · Stig MVP · draft 0.3` is the authoritative, normative description of
+this behavior (RFC 2119 keywords apply). It is a separate document and is **not
+vendored in this repository** — the `SPEC §NN` references throughout the source
+point into it. This README summarizes it; where the two disagree, the spec wins.

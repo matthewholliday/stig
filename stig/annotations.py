@@ -64,6 +64,14 @@ class GrammarError(ValueError):
     """A line looked like an annotation but violated the grammar."""
 
 
+class AnnotationTouchError(ValueError):
+    """The diff channel tried to add, modify, or delete an annotation line.
+
+    Defined here rather than in ``diffutil`` because both the pre-check and the
+    applier — which cannot import ``diffutil`` without a cycle — must raise it.
+    """
+
+
 @dataclass
 class Annotation:
     """One parsed annotation and its location in the medium."""
@@ -198,6 +206,17 @@ def parse_file(text: str, path: str) -> list[Annotation]:
 def is_annotation_line(line: str) -> bool:
     """True for a header line or a continuation line (SPEC §07 diff guard)."""
     return bool(_HEADER_RE.match(line) or _CONT_RE.match(line))
+
+
+def annotation_lines(text: str) -> list[str]:
+    """Every annotation line in a file, in order — the diff guard's invariant.
+
+    A code diff MUST leave this list identical. Comparing before and after is
+    what makes the guard total: it does not matter whether a diff reaches the
+    annotation through a ``+``/``-`` marker, an unmarked line, a whole-file
+    overwrite, or a deletion.
+    """
+    return [ln for ln in text.splitlines() if is_annotation_line(ln)]
 
 
 def status_is_valid(kind: str, status: str | None) -> bool:

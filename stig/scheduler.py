@@ -17,14 +17,24 @@ from .checks import Checks
 from .context import ContextBuilder
 from .diffutil import AnnotationTouchError, assert_no_annotation_lines, diff_hash
 from .gitutil import Git
-from .handlers import HANDLERS, HandlerResult, NewAnnotation
+from .handlers import HANDLERS, HandlerParseError, HandlerResult, NewAnnotation
 from .models import Model
 from .patcher import PatchError, apply_diff
-from .regions import region_hash, repo_structure_hash, resolve_region
+from .regions import enforcing_test_exists, region_hash, repo_structure_hash, resolve_region
 from .repo import ARCHITECTURE_FILE, Repo
 
 STRIKE_CAP = 3
 DEFAULT_BUDGET = 50
+
+# Where an annotation lands when it hits the strike cap (SPEC §11). Every
+# actionable kind needs one: a kind with no cap status would accrue strikes
+# forever and keep the loop from ever reaching fixpoint or blocked.
+_CAP_STATUS: dict[str, tuple[str, str]] = {
+    # kind: (status it must currently hold, status it is driven to)
+    "goal": ("open", "stuck"),
+    "constraint": ("asserted", "violated"),
+    "unresolved": ("open", "needs-human"),
+}
 
 # Terminal success statuses used for dependency satisfaction (SPEC §06).
 _DEP_SATISFIED = {
@@ -91,7 +101,20 @@ class Scheduler:
 
     # -- top of loop: parse, mint ids, demote stale (SPEC §06) ----------------
 
-    def _prepare(self) -> list[Annotation]:
+    def _prepare(self, *, write: bool = True) -> list[Annotation]:
+        """Parse, mint IDs, demote stale verifications.
+
+        With ``write=False`` the same normalization happens purely in memory:
+        ``--dry-run`` must be able to report what would activate without
+        leaving a single byte changed in the repository.
+        """
+        if not write:
+            annotations = self.repo.parse_all()
+            self.repo.check_duplicates()
+            self._assign_missing_ids_in_memory(annotations)
+            self._reset_reopened_strikes(annotations, write=False)
+            self._demote_stale(annotations, write=False)
+            return annotations
         self.repo.assign_missing_ids()
         self.repo.check_duplicates()
         annotations = self.repo.parse_all()
@@ -99,16 +122,29 @@ class Scheduler:
         self._demote_stale(annotations)
         return self.repo.parse_all()
 
-    def _reset_reopened_strikes(self, annotations: list[Annotation]) -> None:
-        """Human reopened a stuck annotation (SPEC §11): actionable status +
-        strikes-at-cap implies a human edit; reset strikes=0, keep @tried."""
+    def _assign_missing_ids_in_memory(self, annotations: list[Annotation]) -> None:
+        counters = self.repo._next_counters(annotations)  # noqa: SLF001 - internal helper
+        from .annotations import KIND_PREFIX
+
         for ann in annotations:
-            if ann.kind == "goal" and ann.status == "open" and ann.strikes >= self.strike_cap:
+            if ann.id is None:
+                counters[ann.kind] += 1
+                ann.id = f"{KIND_PREFIX[ann.kind]}{counters[ann.kind]:02d}"
+
+    def _reset_reopened_strikes(self, annotations: list[Annotation], *, write: bool = True) -> None:
+        """Human reopened a capped annotation (SPEC §11): an actionable status
+        combined with strikes-at-cap implies a human edit — the scheduler itself
+        drives a capped annotation *out* of its actionable status. Reset
+        strikes=0 and keep the @tried history."""
+        for ann in annotations:
+            actionable_status = _CAP_STATUS.get(ann.kind, (None, None))[0]
+            if ann.status == actionable_status and ann.strikes >= self.strike_cap:
                 ann.strikes = 0
-                self.repo.set_header(ann)
+                if write:
+                    self.repo.set_header(ann)
                 self._strike_resets.add(ann.id or "")
 
-    def _demote_stale(self, annotations: list[Annotation]) -> None:
+    def _demote_stale(self, annotations: list[Annotation], *, write: bool = True) -> None:
         """Demote verified/enforced constraints whose region changed or whose
         enforcing test disappeared (SPEC §09)."""
         py_files = self.repo.python_files()
@@ -122,18 +158,12 @@ class Scheduler:
             demote = stored is None or stored != expected
             if ann.status == "enforced":
                 enforced_by = ann.attrs.get("enforced_by")
-                if not enforced_by or not self._test_exists(enforced_by):
+                if not enforced_by or not enforcing_test_exists(enforced_by, py_files):
                     demote = True
             if demote:
                 ann.status = "asserted"
-                self.repo.set_header(ann)
-
-    def _test_exists(self, enforced_by: str) -> bool:
-        name = enforced_by.split("::")[-1].strip()
-        if not name:
-            return False
-        pattern = re.compile(rf"def\s+{re.escape(name)}\b")
-        return any(pattern.search(text) for text in self.repo.python_files().values())
+                if write:
+                    self.repo.set_header(ann)
 
     # -- actionable set, gating, priority (SPEC §06) --------------------------
 
@@ -205,7 +235,7 @@ class Scheduler:
         raw = goal.attrs.get("after", "")
         return [d.strip() for d in raw.split("&") if d.strip()] if raw else []
 
-    def _pick(self, actionable: list[Annotation], annotations: list[Annotation]) -> Annotation:
+    def _pick(self, actionable: list[Annotation]) -> Annotation:
         """Fixed priority rule (SPEC §06). Ties break by ID order."""
         touched = self.git.changed_files_in_head()
 
@@ -231,7 +261,10 @@ class Scheduler:
         if ann.kind == "unresolved":
             return ann.status in ("open", "needs-human")
         if ann.kind == "constraint":
-            return ann.status == "asserted"
+            # `violated` is terminal for the scheduler but not for the project:
+            # an unrepaired invariant is outstanding work, so it blocks rather
+            # than letting the run report fixpoint.
+            return ann.status in ("asserted", "violated")
         return False
 
     def _terminal(self, annotations: list[Annotation], activations: int) -> Outcome:
@@ -246,6 +279,7 @@ class Scheduler:
                 ("unresolved", "needs-human"): "needs a human answer",
                 ("unresolved", "open"): "open question",
                 ("constraint", "asserted"): "asserted, unverified",
+                ("constraint", "violated"): "violated — needs a repair",
             }.get((ann.kind, ann.status), ann.status or "")
             lines.append(f"  {ann.id} [{ann.file}] {ann.kind}: {reason} — {ann.full_body}")
         return Outcome("blocked", "\n".join(lines), activations)
@@ -257,23 +291,29 @@ class Scheduler:
         actionable = self._actionable(annotations)
         if not actionable:
             return StepResult(outcome="terminal", terminal=self._terminal(annotations, 0))
-        active = self._pick(actionable, annotations)
+        active = self._pick(actionable)
         return self._activate(active, annotations)
 
     def run(self, dry_run: bool = False) -> Outcome:
+        if dry_run:
+            # Read-only: parse and pick, write nothing (SPEC §12).
+            annotations = self._prepare(write=False)
+            actionable = self._actionable(annotations)
+            if not actionable:
+                return self._terminal(annotations, 0)
+            active = self._pick(actionable)
+            return Outcome(
+                "dry-run",
+                f"would activate {active.kind}({active.id}): {active.full_body}",
+                0,
+            )
         activations = 0
         while True:
             annotations = self._prepare()
             actionable = self._actionable(annotations)
             if not actionable:
                 return self._terminal(annotations, activations)
-            active = self._pick(actionable, annotations)
-            if dry_run:
-                return Outcome(
-                    "dry-run",
-                    f"would activate {active.kind}({active.id}): {active.full_body}",
-                    activations,
-                )
+            active = self._pick(actionable)
             if activations >= self.budget:
                 return Outcome("budget", f"activation budget of {self.budget} exhausted", activations)
             self._activate(active, annotations)
@@ -281,7 +321,13 @@ class Scheduler:
 
     def _activate(self, active: Annotation, annotations: list[Annotation]) -> StepResult:
         ctx = self.ctx.build(active, annotations)
-        result = HANDLERS[active.kind](active, ctx, self.model)
+        # A malformed model response is an ordinary failed activation: it takes a
+        # strike and is recorded in the medium (SPEC §11). It must never abort the
+        # loop — a crash here would leave the repo mid-activation with no record.
+        try:
+            result = HANDLERS[active.kind](active, ctx, self.model)
+        except HandlerParseError as exc:
+            return self._fail(active, "", f"malformed model response: {exc}")
 
         # Co-editing race (SPEC §06): a snapshot mismatch when the handler returns
         # discards the activation without a strike, without a commit, retry on
@@ -290,7 +336,9 @@ class Scheduler:
             return StepResult(outcome="retry", active_id=active.id, kind=active.kind,
                               detail="context changed during model call; discarded")
 
-        diff = result.diff or ""
+        # A whitespace-only diff is no diff: `apply_diff` no-ops on it, so
+        # treating it as truthy would let it pass as progress.
+        diff = result.diff if (result.diff or "").strip() else ""
         try:
             if diff:
                 assert_no_annotation_lines(diff)
@@ -310,9 +358,13 @@ class Scheduler:
             except PatchError as exc:
                 return self._fail(active, diff, f"diff won't apply: {exc}")
 
-        check = self.checks.run(self.repo.root)
-        if not check.ok:
-            return self._fail(active, diff, f"checks failed: {check.output.strip()[:400]}")
+        # --trust skips the check suite (SPEC §12): the operator accepts the
+        # model's output without pytest/ruff arbitration. Every other gate —
+        # the annotation-line guard, oscillation, the patch itself — still runs.
+        if not self.trust:
+            check = self.checks.run(self.repo.root)
+            if not check.ok:
+                return self._fail(active, diff, f"checks failed: {check.output.strip()[:400]}")
 
         return self._apply_success(active, result, diff)
 
@@ -323,21 +375,36 @@ class Scheduler:
         annotations = self.repo.parse_all()
         index = {a.id: a for a in annotations if a.id}
         transitions: list[str] = []
+        mutated = False  # any accepted write to an annotation header
 
         for upd in result.updates:
             target = index.get(upd.id)
             if target is None:
                 continue
             old_status = target.status
-            status_changed = upd.status is not None and status_is_valid(target.kind, upd.status)
+            status_changed = (
+                upd.status is not None
+                and upd.status != old_status
+                and status_is_valid(target.kind, upd.status)
+            )
             if status_changed:
                 target.status = upd.status
                 transitions.append(f"{target.id} {old_status} → {upd.status}")
+            if upd.body and upd.body != target.body.strip():
+                # The body is where an @unresolved answer lives; without this the
+                # answer the handler produced would be discarded (SPEC §05, §07).
+                target.body = upd.body
+                mutated = True
+            # Only a real change counts as progress: re-asserting a value the
+            # annotation already holds must not buy another activation, or the
+            # no-progress strike below never fires.
             for key, value in upd.set_attrs.items():
                 if value == "":
-                    target.attrs.pop(key, None)
-                else:
+                    if target.attrs.pop(key, None) is not None:
+                        mutated = True
+                elif target.attrs.get(key) != value:
                     target.attrs[key] = value
+                    mutated = True
             # Verification is a claim about a specific version (SPEC §09): stamp
             # region_hash only on the transition *into* verified/enforced — not on
             # an unrelated attr update (e.g. a provisional enforced_by), so a later
@@ -351,6 +418,14 @@ class Scheduler:
             self.repo.set_header(target)
 
         spawned = self._insert_new_annotations(active, result.new_annotations, annotations)
+
+        # Termination guarantee (SPEC §06): an activation that changed nothing —
+        # no diff, no accepted status transition, no body, no spawned annotation —
+        # leaves the annotation actionable in an identical repo, so the next
+        # iteration picks it again forever. Treat no progress as a failure so the
+        # strike cap eventually drives it out of the actionable set.
+        if not diff and not transitions and not spawned and not mutated:
+            return self._fail(active, "", "handler produced no diff and no status change")
 
         commit = self._commit(active, "activated", transitions, spawned)
         detail = ", ".join(transitions) or "no status change"
@@ -411,15 +486,33 @@ class Scheduler:
         # A failed activation reverts all code changes, then records the failure
         # and commits that as the activation's single commit (SPEC §10).
         self.git.revert_worktree()
-        annotations = self.repo.parse_all()
+        # The revert discards everything `_prepare` wrote this iteration — the
+        # minted IDs, the staleness demotions, the human-reopen strike resets —
+        # because none of it was committed. Re-run the whole normalization, not
+        # just minting: without the demotion a stale constraint is back at
+        # `verified` and never matches its cap status, so it accrues strikes
+        # forever; without the reset a reopened goal goes straight back to stuck
+        # on its first retry instead of getting a fresh set of attempts.
+        # `_prepare` is deterministic, so it reproduces exactly what was lost.
+        annotations = self._prepare()
         fresh = {a.id: a for a in annotations if a.id}
-        target = fresh.get(active.id, active)
+        target = fresh.get(active.id)
+        if target is None:
+            # The annotation itself is gone (a human deleted it mid-activation).
+            # Record the failure in history; there is nothing left to strike.
+            commit = self._commit(active, "failed", [], [], reason=reason)
+            return StepResult("failed", active.id, active.kind, reason, commit)
 
         target.strikes = target.strikes + 1
         transitions: list[str] = [f"{target.id} strike {target.strikes}/{self.strike_cap}"]
-        if target.kind == "goal" and target.strikes >= self.strike_cap and target.status == "open":
-            target.status = "stuck"
-            transitions.append(f"{target.id} open → stuck")
+        actionable_status, capped_status = _CAP_STATUS.get(target.kind, (None, None))
+        if (
+            capped_status
+            and target.strikes >= self.strike_cap
+            and target.status == actionable_status
+        ):
+            target.status = capped_status
+            transitions.append(f"{target.id} {actionable_status} → {capped_status}")
         self.repo.set_header(target)
 
         spawned: list[str] = []
@@ -427,10 +520,7 @@ class Scheduler:
         existing = self._tried_hashes(target, annotations)
         if h and h not in existing:
             attrs = {"status": "recorded", "goal": target.id or "", "diff_hash": h}
-            from .annotations import KIND_PREFIX
-
             new_id = self.repo.next_id_for("tried", self.repo.parse_all())
-            _ = KIND_PREFIX  # (kept for symmetry with success path)
             tried = Annotation(
                 kind="tried", id=new_id, attrs=attrs, body=reason[:200],
                 file=target.file, start_line=0, end_line=0, indent=target.indent,

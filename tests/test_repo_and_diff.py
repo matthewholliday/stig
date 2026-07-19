@@ -44,6 +44,34 @@ def test_diff_guard_allows_code():
     assert_no_annotation_lines(diff)  # no raise
 
 
+def test_diff_guard_catches_hunks_with_no_at_header():
+    """The applier tolerates a missing `@@` header, so the guard must too — a
+    guard with a stricter parser than the applier is a bypass (SPEC §07, §11)."""
+    diff = (
+        "--- a/x.py\n+++ b/x.py\n"
+        "-# @constraint(c01, status=asserted): must hold\n"
+        "+# @constraint(c01, status=verified): must hold\n"
+    )
+    with pytest.raises(AnnotationTouchError):
+        assert_no_annotation_lines(diff)
+
+
+def test_diff_guard_and_applier_see_the_same_lines(workrepo):
+    """Whatever the guard passes is exactly what gets written: a headerless diff
+    that forges a status must not reach disk."""
+    repo, _ = workrepo
+    original = "# @constraint(c01, status=asserted): must hold\nx = 1\n"
+    repo.write("x.py", original)
+    forged = (
+        "--- a/x.py\n+++ b/x.py\n"
+        "-# @constraint(c01, status=asserted): must hold\n"
+        "+# @constraint(c01, status=verified): must hold\n"
+    )
+    with pytest.raises(AnnotationTouchError):
+        assert_no_annotation_lines(forged)
+    assert repo.read("x.py") == original
+
+
 def test_diff_hash_stable():
     assert diff_hash("abc") == diff_hash("abc")
     assert len(diff_hash("abc")) == 12

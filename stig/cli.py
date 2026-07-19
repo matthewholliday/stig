@@ -16,11 +16,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .annotations import KIND_PREFIX
+from .annotations import PERMANENT_KINDS, GrammarError
 from .checks import RealChecks
-from .gitutil import Git, init_repo
+from .gitutil import Git, GitError
 from .models import DEFAULT_MODEL, AnthropicModel
-from .regions import region_hash, region_has_executable_lines, repo_structure_hash
+from .regions import (
+    enforcing_test_exists,
+    region_has_executable_lines,
+    region_hash,
+    repo_structure_hash,
+)
 from .repo import ARCHITECTURE_FILE, DuplicateIDError, Repo
 from .scheduler import Scheduler
 
@@ -50,6 +55,12 @@ def _make_scheduler(args, repo: Repo, git: Git) -> Scheduler:
     )
 
 
+def _medium_error(exc: Exception) -> int:
+    """A malformed medium is a user-fixable error, not a traceback (SPEC §04)."""
+    print(f"stig: {exc}", file=sys.stderr)
+    return 1
+
+
 def cmd_run(args) -> int:
     repo = Repo(args.root)
     git = Git(repo.root)
@@ -59,7 +70,10 @@ def cmd_run(args) -> int:
     if not args.dry_run and not _dirty_guard(git, args.adopt):
         return 1
     sched = _make_scheduler(args, repo, git)
-    outcome = sched.run(dry_run=args.dry_run)
+    try:
+        outcome = sched.run(dry_run=args.dry_run)
+    except (DuplicateIDError, GrammarError) as exc:
+        return _medium_error(exc)
     print(f"[{outcome.code}] {outcome.report}")
     print(f"activations: {outcome.activations}")
     return outcome.exit_code
@@ -68,10 +82,16 @@ def cmd_run(args) -> int:
 def cmd_step(args) -> int:
     repo = Repo(args.root)
     git = Git(repo.root)
+    if not git.is_repo():
+        print("stig: not a git repository", file=sys.stderr)
+        return 2
     if not _dirty_guard(git, args.adopt):
         return 1
     sched = _make_scheduler(args, repo, git)
-    result = sched.step()
+    try:
+        result = sched.step()
+    except (DuplicateIDError, GrammarError) as exc:
+        return _medium_error(exc)
     if result.outcome == "terminal":
         print(f"[{result.terminal.code}] {result.terminal.report}")
         return result.terminal.exit_code
@@ -81,7 +101,10 @@ def cmd_step(args) -> int:
 
 def cmd_status(args) -> int:
     repo = Repo(args.root)
-    annotations = repo.parse_all()
+    try:
+        annotations = repo.parse_all()
+    except GrammarError as exc:
+        return _medium_error(exc)
     if not annotations:
         print("no annotations found")
         return 0
@@ -101,11 +124,11 @@ def cmd_check(args) -> int:
     warnings: list[str] = []
     try:
         repo.check_duplicates()
-    except DuplicateIDError as exc:
-        errors.append(str(exc))
-
-    annotations = repo.parse_all()
-    py_files = repo.python_files()
+        annotations = repo.parse_all()
+        py_files = repo.python_files()
+    except (DuplicateIDError, GrammarError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     struct_hash = repo_structure_hash(py_files)
     for ann in annotations:
         if ann.kind == "constraint" and ann.status in ("verified", "enforced"):
@@ -117,9 +140,7 @@ def cmd_check(args) -> int:
                 errors.append(f"{ann.id}: stale verification (region changed)")
             if ann.status == "enforced":
                 enforced_by = ann.attrs.get("enforced_by", "")
-                name = enforced_by.split("::")[-1]
-                exists = any(f"def {name}" in t for t in py_files.values()) if name else False
-                if not exists:
+                if not enforcing_test_exists(enforced_by, py_files):
                     errors.append(f"{ann.id}: enforced_by test {enforced_by!r} not found")
         # Empty-region warning (SPEC §03).
         if ann.kind in ("goal", "constraint") and not repo.is_repo_scoped(ann):
@@ -139,7 +160,10 @@ def cmd_check(args) -> int:
 def cmd_strip(args) -> int:
     """Remove resolved annotations; keep permanent records by default (SPEC §12)."""
     repo = Repo(args.root)
-    annotations = repo.parse_all()
+    try:
+        annotations = repo.parse_all()
+    except GrammarError as exc:
+        return _medium_error(exc)
     satisfied_goals = {
         a.id for a in annotations if a.kind == "goal" and a.status == "satisfied"
     }
@@ -147,11 +171,16 @@ def cmd_strip(args) -> int:
     archived: list[str] = []
     to_remove: list = []
     for ann in annotations:
-        if args.all:
-            if ann.kind in ("goal", "unresolved", "decision", "tried"):
-                to_remove.append(ann)
+        # @decision and @tried are the permanent record (SPEC §03): they are
+        # never consumed, and --all does not mean "including those".
+        if ann.kind in PERMANENT_KINDS and not (
+            args.archive and ann.kind == "tried" and ann.attrs.get("goal") in satisfied_goals
+        ):
             continue
-        if ann.kind == "goal" and ann.status == "satisfied":
+        if args.all and ann.kind in ("goal", "unresolved"):
+            # --all widens the net to every goal/question, resolved or not.
+            to_remove.append(ann)
+        elif ann.kind == "goal" and ann.status == "satisfied":
             to_remove.append(ann)
         elif ann.kind == "unresolved" and ann.status == "answered":
             to_remove.append(ann)
@@ -180,8 +209,6 @@ def cmd_strip(args) -> int:
 def cmd_seed(args) -> int:
     """Sugar: one model call that writes initial @goal annotations (SPEC §12)."""
     repo = Repo(args.root)
-    if not repo.exists("."):
-        pass
     model = AnthropicModel(model=getattr(args, "model", DEFAULT_MODEL))
     system = (
         "You are Stig's seed command. Given a prompt describing a project, emit "
@@ -206,16 +233,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-venv", action="store_true", help="run checks in the current env")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    _TRUST_HELP = "skip the check suite; accept the model's diff without pytest/ruff"
+    _ADOPT_HELP = "commit pre-existing uncommitted changes as human changes first"
+
     p_run = sub.add_parser("run", help="loop to fixpoint, blocked, or budget")
-    p_run.add_argument("--budget", type=int, default=50)
-    p_run.add_argument("--dry-run", action="store_true")
-    p_run.add_argument("--trust", action="store_true")
-    p_run.add_argument("--adopt", action="store_true")
+    p_run.add_argument("--budget", type=int, default=50, help="max activations (default: 50)")
+    p_run.add_argument("--dry-run", action="store_true",
+                       help="report what would activate; write nothing")
+    p_run.add_argument("--trust", action="store_true", help=_TRUST_HELP)
+    p_run.add_argument("--adopt", action="store_true", help=_ADOPT_HELP)
     p_run.set_defaults(func=cmd_run)
 
     p_step = sub.add_parser("step", help="exactly one activation")
-    p_step.add_argument("--trust", action="store_true")
-    p_step.add_argument("--adopt", action="store_true")
+    p_step.add_argument("--trust", action="store_true", help=_TRUST_HELP)
+    p_step.add_argument("--adopt", action="store_true", help=_ADOPT_HELP)
     p_step.set_defaults(func=cmd_step)
 
     p_status = sub.add_parser("status", help="table of every annotation")
@@ -239,8 +270,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    _ = (KIND_PREFIX, init_repo)  # referenced for completeness of the module surface
-    return args.func(args)
+    try:
+        return args.func(args)
+    except GitError as exc:
+        print(f"stig: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
