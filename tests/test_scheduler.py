@@ -1,5 +1,5 @@
 """Machinery-level coverage of the scheduler, including the acceptance-test
-scenarios (SPEC §13) exercised with a scripted model and stub checks."""
+scenarios exercised with a scripted model and stub checks."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def test_unresolved_answered(workrepo):
     assert annotation(repo, "u01").status == "answered"
 
 
-# -- staleness (SPEC §09) ---------------------------------------------------
+# -- staleness --------------------------------------------------------------
 
 def test_region_change_demotes_verified_constraint(workrepo):
     repo, git = workrepo
@@ -100,7 +100,7 @@ def test_region_change_demotes_verified_constraint(workrepo):
     assert next(a for a in annotations if a.id == "c01").status == "asserted"
 
 
-# -- failure handling (SPEC §11) --------------------------------------------
+# -- failure handling -------------------------------------------------------
 
 def test_stuck_after_strike_cap_with_distinct_tries(workrepo):
     repo, git = workrepo
@@ -156,7 +156,7 @@ def test_strike_reset_on_human_reopen(workrepo):
     assert annotation(repo, "g01").strikes == 0
 
 
-# -- co-editing race (SPEC §06) ---------------------------------------------
+# -- co-editing race --------------------------------------------------------
 
 def test_inflight_edit_discards_without_strike(workrepo):
     repo, git = workrepo
@@ -180,7 +180,7 @@ def test_inflight_edit_discards_without_strike(workrepo):
     assert annotation(repo, "g01").strikes == 0
 
 
-# -- gating (SPEC §06) ------------------------------------------------------
+# -- gating -----------------------------------------------------------------
 
 def test_needs_human_gates_overlapping_goal(workrepo):
     repo, git = workrepo
@@ -219,7 +219,7 @@ def test_after_dependency_blocks_until_satisfied(workrepo):
     assert annotation(repo, "g02").status == "satisfied"
 
 
-# -- graduation relay (SPEC §07, §09) ---------------------------------------
+# -- graduation relay -------------------------------------------------------
 
 def test_graduation_relay_verifier_to_enforced(workrepo):
     repo, git = workrepo
@@ -261,7 +261,7 @@ def test_graduation_relay_verifier_to_enforced(workrepo):
     assert annotation(repo, "g01").status == "satisfied"
 
 
-# -- budget (SPEC §06) ------------------------------------------------------
+# -- budget -----------------------------------------------------------------
 
 def test_new_annotation_status_normalized(workrepo):
     repo, git = workrepo
@@ -296,7 +296,7 @@ def test_budget_exhaustion(workrepo):
 
 
 def test_no_progress_activation_strikes_out_instead_of_spinning(workrepo):
-    """SPEC §06 termination: an activation that changes nothing leaves the repo
+    """Termination: an activation that changes nothing leaves the repo
     identical and the annotation actionable, so it would be picked forever. It
     must take a strike and eventually leave the actionable set."""
     repo, git = workrepo
@@ -313,7 +313,7 @@ def test_no_progress_activation_strikes_out_instead_of_spinning(workrepo):
 
 
 def test_malformed_model_response_is_a_strike_not_a_crash(workrepo):
-    """SPEC §11: a response that fails the output contract is an ordinary failed
+    """A response that fails the output contract is an ordinary failed
     activation. It must never abort the loop."""
     repo, git = workrepo
     repo.write("m.py", "# @goal(g01, status=open): do it\ndef f():\n    return 0\n")
@@ -343,7 +343,7 @@ def test_diff_containing_braces_parses(workrepo):
 
 
 def test_unresolved_answer_is_written_into_the_body(workrepo):
-    """SPEC §05: the answer only survives if it lands in the medium."""
+    """The answer only survives if it lands in the medium."""
     repo, git = workrepo
     repo.write("q.py", "# @unresolved(u01, status=open): which db?\nx = 1\n")
     git.commit("human: seed")
@@ -360,7 +360,7 @@ def test_unresolved_answer_is_written_into_the_body(workrepo):
 
 
 def test_strike_cap_applies_to_constraints_and_questions(workrepo):
-    """SPEC §11: every actionable kind needs a cap status, or the loop never
+    """Every actionable kind needs a cap status, or the loop never
     terminates for that kind."""
     repo, git = workrepo
     repo.write("db.py", "# @constraint(c01, status=asserted): holds\ndef f():\n    return []\n")
@@ -375,7 +375,7 @@ def test_strike_cap_applies_to_constraints_and_questions(workrepo):
 
 
 def test_dry_run_writes_nothing(workrepo):
-    """SPEC §12: --dry-run reports the pick; it must not mint IDs or demote."""
+    """--dry-run reports the pick; it must not mint IDs or demote."""
     repo, git = workrepo
     repo.write("m.py", "# @goal(, status=open): needs an ID\ndef f():\n    return 0\n")
     git.commit("human: seed")
@@ -391,7 +391,7 @@ def test_dry_run_writes_nothing(workrepo):
 
 
 def test_trust_skips_the_check_suite(workrepo):
-    """SPEC §12: --trust accepts the diff without pytest/ruff arbitration."""
+    """--trust accepts the diff without running the check suite."""
     repo, git = workrepo
     stub = "# @goal(g01, status=open): implement\ndef f():\n    return 0\n"
     repo.write("m.py", stub)
@@ -491,7 +491,7 @@ def test_restating_the_current_status_is_not_progress(workrepo):
 
 
 def test_kill_and_resume_is_equivalent_to_an_uninterrupted_run(workrepo):
-    """SPEC §13: state lives only in the repo, so a killed run resumes from the
+    """State lives only in the repo, so a killed run resumes from the
     repository alone — the scheduler object carries nothing across iterations."""
     repo, git = workrepo
     src = "# @goal(g01, status=open): first\ndef a():\n    return 0\n"

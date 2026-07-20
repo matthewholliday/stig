@@ -1,4 +1,4 @@
-"""Stateless model calls — the transforms (SPEC §01, §07).
+"""Stateless model calls — the transforms.
 
 Intelligence about *how* to do things lives in the frozen model. No call knows
 any other call happened except through what is written in the files. Handler
@@ -11,7 +11,7 @@ import json
 import re
 from typing import Protocol
 
-# The frozen model. Intelligence about how to do things lives here (SPEC §01).
+# The frozen model. Intelligence about how to do things lives here.
 DEFAULT_MODEL = "claude-opus-4-8"
 
 
@@ -23,7 +23,7 @@ class Model(Protocol):
 class AnthropicModel:
     """A real, stateless Anthropic-backed transform.
 
-    One request–response per activation (SPEC §07). The SDK is imported lazily
+    One request–response per activation. The SDK is imported lazily
     so the rest of Stig runs without the optional dependency.
     """
 
@@ -77,7 +77,7 @@ def extract_json(text: str) -> dict:
     """Extract the handler's structured JSON object from a model response.
 
     Accepts a ```json fenced block or a bare object. Only the structured
-    channel is acted upon; free-text reasoning around it is ignored (SPEC §07).
+    channel is acted upon; free-text reasoning around it is ignored.
     """
     fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     for candidate in (fence.group(1) if fence else None, text.strip()):

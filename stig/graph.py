@@ -1,4 +1,4 @@
-"""A cheap static import graph (SPEC §08).
+"""A cheap static import graph.
 
 Context assembly walks direct imports of a file and direct importers of it —
 one hop each way. This is a deterministic function of the source, not a

@@ -1,4 +1,4 @@
-"""Region resolution and staleness hashing (SPEC §03, §09).
+"""Region resolution and staleness hashing.
 
 The region is the span of code an annotation governs. Default: an annotation
 attaches to the next definition (``def`` / ``class``) that follows it in the
@@ -75,7 +75,7 @@ def _scope_end(lines: list[str], anno_idx: int, indent: int) -> int:
 
 
 def resolve_region(ann: Annotation, file_text: str) -> Region:
-    """Resolve the governed region of ``ann`` within its file (SPEC §03)."""
+    """Resolve the governed region of ``ann`` within its file."""
     lines = file_text.splitlines()
     if ann.attrs.get("region") == "file":
         return Region(0, max(0, len(lines) - 1), "file")
@@ -108,7 +108,7 @@ def resolve_region(ann: Annotation, file_text: str) -> Region:
 
 
 def _normalize_region_text(lines: list[str], region: Region) -> str:
-    """Whitespace-normalized region text, annotation lines excluded (SPEC §09)."""
+    """Whitespace-normalized region text, annotation lines excluded."""
     out: list[str] = []
     for idx in region.line_range():
         if idx >= len(lines):
@@ -149,7 +149,7 @@ def region_has_executable_lines(ann: Annotation, file_text: str) -> bool:
 
 
 def enforcing_test_exists(enforced_by: str, py_files: dict[str, str]) -> bool:
-    """True if every test named by an ``enforced_by=`` reference is defined (SPEC §09).
+    """True if every test named by an ``enforced_by=`` reference is defined.
 
     Shared by ``stig check`` and the scheduler's staleness demotion so the two
     can never reach opposite conclusions about the same annotation.
@@ -181,7 +181,7 @@ def missing_enforcing_tests(enforced_by: str, py_files: dict[str, str]) -> list[
 
 
 def repo_structure_hash(files: dict[str, str]) -> str:
-    """Hash of the sorted set of (file path, import statements) pairs (SPEC §09).
+    """Hash of the sorted set of (file path, import statements) pairs.
 
     Repo-scoped constraints demote on structural change (new files, changed
     imports), not on every edit.

@@ -1,4 +1,4 @@
-"""The scheduler (SPEC §06). A deliberately dumb loop with no memory between
+"""The scheduler. A deliberately dumb loop with no memory between
 iterations beyond the repository itself: parse, pick, dispatch, apply, commit,
 repeat. It terminates at fixpoint — when nothing is actionable and nothing
 remains open, stuck, or waiting on a human.
@@ -26,7 +26,7 @@ from .repo import ARCHITECTURE_FILE, Repo
 STRIKE_CAP = 3
 DEFAULT_BUDGET = 50
 
-# Where an annotation lands when it hits the strike cap (SPEC §11). Every
+# Where an annotation lands when it hits the strike cap. Every
 # actionable kind needs one: a kind with no cap status would accrue strikes
 # forever and keep the loop from ever reaching fixpoint or blocked.
 _CAP_STATUS: dict[str, tuple[str, str]] = {
@@ -36,7 +36,7 @@ _CAP_STATUS: dict[str, tuple[str, str]] = {
     "unresolved": ("open", "needs-human"),
 }
 
-# Terminal success statuses used for dependency satisfaction (SPEC §06).
+# Terminal success statuses used for dependency satisfaction.
 _DEP_SATISFIED = {
     "goal": {"satisfied"},
     "constraint": {"verified", "enforced"},
@@ -99,7 +99,7 @@ class Scheduler:
         self.log = logger or (lambda *a, **k: None)
         self._strike_resets: set[str] = set()
 
-    # -- top of loop: parse, mint ids, demote stale (SPEC §06) ----------------
+    # -- top of loop: parse, mint ids, demote stale ---------------------------
 
     def _prepare(self, *, write: bool = True) -> list[Annotation]:
         """Parse, mint IDs, demote stale verifications.
@@ -132,7 +132,7 @@ class Scheduler:
                 ann.id = f"{KIND_PREFIX[ann.kind]}{counters[ann.kind]:02d}"
 
     def _reset_reopened_strikes(self, annotations: list[Annotation], *, write: bool = True) -> None:
-        """Human reopened a capped annotation (SPEC §11): an actionable status
+        """Human reopened a capped annotation: an actionable status
         combined with strikes-at-cap implies a human edit — the scheduler itself
         drives a capped annotation *out* of its actionable status. Reset
         strikes=0 and keep the @tried history."""
@@ -146,7 +146,7 @@ class Scheduler:
 
     def _demote_stale(self, annotations: list[Annotation], *, write: bool = True) -> None:
         """Demote verified/enforced constraints whose region changed or whose
-        enforcing test disappeared (SPEC §09)."""
+        enforcing test disappeared."""
         py_files = self.repo.python_files()
         struct_hash = repo_structure_hash(py_files)
         for ann in annotations:
@@ -165,7 +165,7 @@ class Scheduler:
                 if write:
                     self.repo.set_header(ann)
 
-    # -- actionable set, gating, priority (SPEC §06) --------------------------
+    # -- actionable set, gating, priority -------------------------------------
 
     def _actionable(self, annotations: list[Annotation]) -> list[Annotation]:
         index = {a.id: a for a in annotations if a.id}
@@ -194,7 +194,7 @@ class Scheduler:
         return True
 
     def _dep_blocked(self, goal: Annotation, index, _seen=None) -> bool:
-        """The dependency chain contains a stuck goal or needs-human (SPEC §06)."""
+        """The dependency chain contains a stuck goal or needs-human."""
         seen = _seen or set()
         for dep in self._after(goal):
             if dep in seen:
@@ -214,7 +214,7 @@ class Scheduler:
 
     def _gated(self, goal: Annotation, annotations: list[Annotation]) -> bool:
         """A needs-human question governing an overlapping region, or repo-scoped,
-        gates the work it shapes (SPEC §06)."""
+        gates the work it shapes."""
         goal_region = None
         for ann in annotations:
             if ann.kind != "unresolved" or ann.status != "needs-human":
@@ -236,7 +236,7 @@ class Scheduler:
         return [d.strip() for d in raw.split("&") if d.strip()] if raw else []
 
     def _pick(self, actionable: list[Annotation]) -> Annotation:
-        """Fixed priority rule (SPEC §06). Ties break by ID order."""
+        """Fixed priority rule. Ties break by ID order."""
         touched = self.git.changed_files_in_head()
 
         def tier(ann: Annotation) -> int:
@@ -253,7 +253,7 @@ class Scheduler:
 
         return sorted(actionable, key=lambda a: (tier(a), _id_key(a.id)))[0]
 
-    # -- termination (SPEC §06) ----------------------------------------------
+    # -- termination ---------------------------------------------------------
 
     def _is_pending(self, ann: Annotation) -> bool:
         if ann.kind == "goal":
@@ -284,7 +284,7 @@ class Scheduler:
             lines.append(f"  {ann.id} [{ann.file}] {ann.kind}: {reason} — {ann.full_body}")
         return Outcome("blocked", "\n".join(lines), activations)
 
-    # -- one activation (SPEC §06, §07, §10) ---------------------------------
+    # -- one activation ------------------------------------------------------
 
     def step(self) -> StepResult:
         annotations = self._prepare()
@@ -296,7 +296,7 @@ class Scheduler:
 
     def run(self, dry_run: bool = False) -> Outcome:
         if dry_run:
-            # Read-only: parse and pick, write nothing (SPEC §12).
+            # Read-only: parse and pick, write nothing.
             annotations = self._prepare(write=False)
             actionable = self._actionable(annotations)
             if not actionable:
@@ -322,14 +322,14 @@ class Scheduler:
     def _activate(self, active: Annotation, annotations: list[Annotation]) -> StepResult:
         ctx = self.ctx.build(active, annotations)
         # A malformed model response is an ordinary failed activation: it takes a
-        # strike and is recorded in the medium (SPEC §11). It must never abort the
+        # strike and is recorded in the medium. It must never abort the
         # loop — a crash here would leave the repo mid-activation with no record.
         try:
             result = HANDLERS[active.kind](active, ctx, self.model)
         except HandlerParseError as exc:
             return self._fail(active, "", f"malformed model response: {exc}")
 
-        # Co-editing race (SPEC §06): a snapshot mismatch when the handler returns
+        # Co-editing race: a snapshot mismatch when the handler returns
         # discards the activation without a strike, without a commit, retry on
         # fresh state — the model reasoned about a state that no longer exists.
         if self.ctx.disk_hashes(ctx.snapshot) != ctx.snapshot:
@@ -345,7 +345,7 @@ class Scheduler:
         except AnnotationTouchError as exc:
             return self._fail(active, diff, f"diff touched annotation lines: {exc}")
 
-        # Oscillation (SPEC §11): a diff hash matching any @tried for this
+        # Oscillation: a diff hash matching any @tried for this
         # annotation is a strike without applying or re-calling the model.
         if diff:
             h = diff_hash(diff)
@@ -358,7 +358,7 @@ class Scheduler:
             except PatchError as exc:
                 return self._fail(active, diff, f"diff won't apply: {exc}")
 
-        # --trust skips the check suite (SPEC §12): the operator accepts the
+        # --trust skips the check suite: the operator accepts the
         # model's output without pytest/ruff arbitration. Every other gate —
         # the annotation-line guard, oscillation, the patch itself — still runs.
         if not self.trust:
@@ -392,7 +392,7 @@ class Scheduler:
                 transitions.append(f"{target.id} {old_status} → {upd.status}")
             if upd.body and upd.body != target.body.strip():
                 # The body is where an @unresolved answer lives; without this the
-                # answer the handler produced would be discarded (SPEC §05, §07).
+                # answer the handler produced would be discarded.
                 target.body = upd.body
                 mutated = True
             # Only a real change counts as progress: re-asserting a value the
@@ -405,7 +405,7 @@ class Scheduler:
                 elif target.attrs.get(key) != value:
                     target.attrs[key] = value
                     mutated = True
-            # Verification is a claim about a specific version (SPEC §09): stamp
+            # Verification is a claim about a specific version: stamp
             # region_hash only on the transition *into* verified/enforced — not on
             # an unrelated attr update (e.g. a provisional enforced_by), so a later
             # structural change can still demote the constraint (graduation relay).
@@ -419,7 +419,7 @@ class Scheduler:
 
         spawned = self._insert_new_annotations(active, result.new_annotations, annotations)
 
-        # Termination guarantee (SPEC §06): an activation that changed nothing —
+        # Termination guarantee: an activation that changed nothing —
         # no diff, no accepted status transition, no body, no spawned annotation —
         # leaves the annotation actionable in an identical repo, so the next
         # iteration picks it again forever. Treat no progress as a failure so the
@@ -441,7 +441,7 @@ class Scheduler:
     ) -> list[str]:
         if not new_annos:
             return []
-        # The scheduler is the sole minting authority (SPEC §04).
+        # The scheduler is the sole minting authority.
         counters: dict[str, int] = {}
         base = self.repo._next_counters(annotations)  # noqa: SLF001 - internal helper
         spawned: list[str] = []
@@ -455,7 +455,7 @@ class Scheduler:
             counters[na.kind] += 1
             new_id = f"{KIND_PREFIX[na.kind]}{counters[na.kind]:02d}"
             # Normalize an out-of-vocabulary status to the kind's default so the
-            # medium stays self-describing (SPEC §04, §05).
+            # medium stays self-describing.
             status = na.status if status_is_valid(na.kind, na.status) else DEFAULT_STATUS[na.kind]
             attrs = {"status": status, **na.attrs}
             ann = Annotation(
@@ -473,7 +473,7 @@ class Scheduler:
             self.repo.append_lines(ARCHITECTURE_FILE, rendered)
         return spawned
 
-    # -- failure path (SPEC §10, §11) ----------------------------------------
+    # -- failure path --------------------------------------------------------
 
     def _tried_hashes(self, active: Annotation, annotations: list[Annotation]) -> set[str]:
         return {
@@ -484,7 +484,7 @@ class Scheduler:
 
     def _fail(self, active: Annotation, diff: str, reason: str) -> StepResult:
         # A failed activation reverts all code changes, then records the failure
-        # and commits that as the activation's single commit (SPEC §10).
+        # and commits that as the activation's single commit.
         self.git.revert_worktree()
         # The revert discards everything `_prepare` wrote this iteration — the
         # minted IDs, the staleness demotions, the human-reopen strike resets —
@@ -533,7 +533,7 @@ class Scheduler:
         commit = self._commit(target, "failed", transitions, spawned, reason=reason)
         return StepResult("failed", target.id, target.kind, reason, commit)
 
-    # -- git (SPEC §10): one activation = one commit -------------------------
+    # -- git: one activation = one commit ------------------------------------
 
     def _commit(
         self,

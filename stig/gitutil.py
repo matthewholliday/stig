@@ -1,4 +1,4 @@
-"""Git integration (SPEC §10). Git history is part of the medium.
+"""Git integration. Git history is part of the medium.
 
 One activation = one commit. Activation numbering and audit provenance are
 derived from git history, never from process memory.
@@ -58,7 +58,7 @@ class Git:
         return bool(proc.stdout.strip())
 
     def changed_files_in_head(self) -> set[str]:
-        """Files touched by the commit at HEAD (SPEC §06 priority rule)."""
+        """Files touched by the commit at HEAD."""
         if not self.has_commits():
             return set()
         # For the root commit, diff-tree has no parent; use --root.
@@ -68,7 +68,7 @@ class Git:
         return {ln.strip() for ln in proc.stdout.splitlines() if ln.strip()}
 
     def activation_count(self) -> int:
-        """Number of activations already recorded in history (SPEC §10)."""
+        """Number of activations already recorded in history."""
         if not self.has_commits():
             return 0
         proc = self._run("log", "--grep", "^activation:", "--format=%H", check=False)

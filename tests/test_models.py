@@ -1,4 +1,4 @@
-"""The structured channel's single parse point (SPEC §07).
+"""The structured channel's single parse point.
 
 Every handler response funnels through ``extract_json``, so a parsing gap here
 is a gap in every activation.

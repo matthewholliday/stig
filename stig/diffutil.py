@@ -1,4 +1,4 @@
-"""Diff channel handling (SPEC §07, §11).
+"""Diff channel handling.
 
 The two output channels are disjoint: the diff channel is for code only, and
 ``apply_diff`` rejects any hunk that adds, modifies, or deletes an annotation
@@ -20,7 +20,7 @@ class AnnotationTouchError(ValueError):
 
 
 def diff_hash(diff_text: str) -> str:
-    """sha256[:12] of a diff — stored as diff_hash= on @tried (SPEC §11)."""
+    """sha256[:12] of a diff — stored as diff_hash= on @tried."""
     return hashlib.sha256(diff_text.encode("utf-8")).hexdigest()[:12]
 
 
@@ -43,7 +43,7 @@ def _hunk_body_lines(diff_text: str):
 
 
 def assert_no_annotation_lines(diff_text: str) -> None:
-    """Reject a diff that touches annotation lines (SPEC §07)."""
+    """Reject a diff that touches annotation lines."""
     for _marker, content in _hunk_body_lines(diff_text):
         if is_annotation_line(content):
             raise AnnotationTouchError(

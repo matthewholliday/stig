@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Stig" }]
-dependencies = []
+# tomllib is stdlib from 3.11; the backport covers the 3.10 floor only.
+dependencies = ['tomli>=1.2; python_version < "3.11"']
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]

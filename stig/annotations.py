@@ -1,4 +1,4 @@
-"""The annotation grammar and lifecycle model (SPEC §03, §04, §05).
+"""The annotation grammar and lifecycle model.
 
 An annotation is a single-line, machine-parseable comment carrying typed state:
 a kind, a stable ID, a status, optional attributes, and free-text body.
@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
-# The five kinds and their one-letter ID prefixes (SPEC §03, §04).
+# The five kinds and their one-letter ID prefixes.
 # ---------------------------------------------------------------------------
 
 KIND_PREFIX: dict[str, str] = {
@@ -29,7 +29,7 @@ PREFIX_KIND: dict[str, str] = {v: k for k, v in KIND_PREFIX.items()}
 
 KINDS = tuple(KIND_PREFIX)
 
-# Lifecycles (SPEC §05). The status set for each kind is closed.
+# Lifecycles. The status set for each kind is closed.
 VALID_STATUS: dict[str, set[str]] = {
     "goal": {"open", "satisfied", "stuck"},
     "constraint": {"asserted", "verified", "violated", "enforced"},
@@ -38,10 +38,10 @@ VALID_STATUS: dict[str, set[str]] = {
     "tried": {"recorded"},
 }
 
-# Kinds that are a permanent record: never actionable, never consumed (SPEC §03).
+# Kinds that are a permanent record: never actionable, never consumed.
 PERMANENT_KINDS = {"decision", "tried"}
 
-# The status a newly-minted annotation of each kind starts in (SPEC §05).
+# The status a newly-minted annotation of each kind starts in.
 DEFAULT_STATUS: dict[str, str] = {
     "goal": "open",
     "constraint": "asserted",
@@ -51,7 +51,7 @@ DEFAULT_STATUS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Grammar (SPEC §04).
+# Grammar.
 # ---------------------------------------------------------------------------
 
 _HEADER_RE = re.compile(
@@ -233,7 +233,7 @@ def parse_file(text: str, path: str) -> list[Annotation]:
 
 
 def is_annotation_line(line: str) -> bool:
-    """True for a header line or a continuation line (SPEC §07 diff guard)."""
+    """True for a header line or a continuation line."""
     return bool(_HEADER_RE.match(line) or _CONT_RE.match(line))
 
 
