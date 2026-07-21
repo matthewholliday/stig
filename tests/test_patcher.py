@@ -4,7 +4,7 @@ from stig.annotations import AnnotationTouchError
 from stig.patcher import PatchError, apply_diff
 from stig.repo import PathEscapeError
 
-# -- the diff channel may not reach annotations by ANY route (SPEC §07) ------
+# -- the diff channel may not reach annotations by ANY route -----------------
 #
 # Marker inspection alone is necessarily partial: a whole-file overwrite, a
 # deletion, or an unmarked line carries no +/- marker at all. These are the

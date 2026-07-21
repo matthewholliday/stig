@@ -1,4 +1,4 @@
-"""Handlers — one per kind (SPEC §07).
+"""Handlers — one per kind.
 
 Each handler is a prompt template + response parser bound to one annotation
 kind. Handlers are pure: repo slice in, diff + status updates out. The two
@@ -16,7 +16,7 @@ from .models import Model, extract_json
 
 
 class HandlerParseError(ValueError):
-    """The model's response did not satisfy the output contract (SPEC §07)."""
+    """The model's response did not satisfy the output contract."""
 
 
 @dataclass
@@ -78,7 +78,7 @@ def _as_attrs(value) -> dict[str, str]:
 
 def _parse(raw: str) -> HandlerResult:
     """Parse the structured channel. Malformed output is a handler failure, not
-    a crash: the scheduler turns ``HandlerParseError`` into a strike (SPEC §11).
+    a crash: the scheduler turns ``HandlerParseError`` into a strike.
 
     Individual malformed entries are skipped rather than failing the whole
     response — a well-formed diff should not be lost to one bad update record.
@@ -125,7 +125,7 @@ def _parse(raw: str) -> HandlerResult:
 
 
 def goal_handler(active: Annotation, ctx: Context, model: Model) -> HandlerResult:
-    """The only handler that writes non-comment code (SPEC §07)."""
+    """The only handler that writes non-comment code."""
     system = (
         "You are the Stig goal handler. You write code to satisfy an open @goal. "
         "You are stateless: the repository is your only memory. When the goal is "
@@ -142,7 +142,7 @@ def goal_handler(active: Annotation, ctx: Context, model: Model) -> HandlerResul
 
 
 def constraint_handler(active: Annotation, ctx: Context, model: Model) -> HandlerResult:
-    """Verifies only — never edits code, tests included (SPEC §07, §09)."""
+    """Verifies only — never edits code, tests included."""
     system = (
         "You are the Stig constraint handler. You VERIFY an invariant against the "
         "governed region and its callers. You NEVER edit code — the `diff` channel "
@@ -163,7 +163,7 @@ def constraint_handler(active: Annotation, ctx: Context, model: Model) -> Handle
 
 
 def unresolved_handler(active: Annotation, ctx: Context, model: Model) -> HandlerResult:
-    """Answer from the repo, or escalate to the human (SPEC §07)."""
+    """Answer from the repo, or escalate to the human."""
     system = (
         "You are the Stig unresolved handler. Answer the open question by reading "
         "the repository. If the answer is derivable, set status `answered` AND put "

@@ -7,8 +7,9 @@
 > The system terminates when nothing is actionable and nothing is blocked.
 > **There is no agent.**
 
-Stig (from *stigmergy*: coordination through traces left in a shared medium) is a
-reference implementation of [SPEC-001 · Stig MVP · draft 0.3](#spec).
+Stig takes its name from *stigmergy*: coordination through traces left in a
+shared medium. Here the medium is the repository, and it is the only thing the
+system remembers.
 
 ## The three components and the deliberate absence
 
@@ -39,7 +40,7 @@ Handler calls use `claude-opus-4-8` by default and read credentials from the
 environment (`ANTHROPIC_API_KEY`, or an `ant auth login` profile). The scheduler
 machinery runs without the optional dependency — only live activations need it.
 
-## The five kinds (SPEC §03–§05)
+## The five kinds
 
 | Kind          | Role                                                        | Statuses |
 |---------------|------------------------------------------------------------|----------|
@@ -62,17 +63,17 @@ async def fetch_all(query: str) -> list[Row]:
 ```
 
 All four annotations attach to `fetch_all` — the next definition below them
-(decorator-style, SPEC §03) — so `c09`'s region is the function body. The one
+(decorator-style) — so `c09`'s region is the function body. The one
 root-level `ARCHITECTURE.anno` file holds repo-scoped annotations.
 
-## CLI (SPEC §12)
+## CLI
 
 ```
 stig init [name] [--package P] [--seed "<prompt>"]      # scaffold a ready-to-run project
 stig run [--budget N] [--dry-run] [--trust] [--adopt]   # loop to fixpoint, blocked, or budget
 stig step [--trust] [--adopt]                            # exactly one activation
 stig status                                              # every annotation, status, strikes
-stig check                                               # parse + hash pass only; CI-friendly (exits 1 on staleness/dups/grammar)
+stig check                                               # parse + hash + check-manifest pass; CI-friendly (exits 1 on staleness/dups/grammar)
 stig strip [--all] [--archive]                           # remove resolved goals/questions; keep decisions & tried
 stig seed "<prompt>"                                     # sugar: write initial @goal annotations
 ```
@@ -85,7 +86,7 @@ than a manifest-derived venv).
 |------|--------|
 | `--budget N` | stop after N activations (default 50) |
 | `--dry-run` | report which annotation *would* activate, then exit. Writes nothing — no ID minting, no staleness demotion, no commit |
-| `--trust` | skip the check suite; accept the model's diff without pytest/ruff arbitration. Every other gate — annotation-line guard, oscillation, patch application — still runs |
+| `--trust` | skip the check suite; accept the model's diff unarbitrated. Every other gate — annotation-line guard, oscillation, patch application — still runs |
 | `--adopt` | commit pre-existing uncommitted changes as human changes instead of refusing to run |
 | `--all` | widen `strip` to every goal and question regardless of status. `@decision` and `@tried` are the permanent record; `--all` does not touch them |
 | `--archive` | relocate `@tried` of satisfied goals into `ARCHITECTURE.anno` instead of deleting them |
@@ -104,7 +105,7 @@ Enforcement is all-or-nothing: if any named test is missing, the constraint
 demotes to `asserted`. Attribute values are sanitized when written, so a comma
 folds onto `&` rather than rendering a header the parser would reject.
 
-## How one activation works (SPEC §06)
+## How one activation works
 
 ```
 loop:
@@ -119,30 +120,81 @@ loop:
   result = handlers[a.kind](a, ctx)         # stateless call
   if disk_hashes() != snapshot: continue    # human edited mid-call ⇒ discard, no strike
   apply_diff(result.diff)                    # rejected if it touches annotation lines
-  run_checks()                               # pytest + ruff in a manifest-derived venv; fail ⇒ revert & record @tried
+  run_checks()                               # the declared checks, in a manifest-derived venv; fail ⇒ revert & record @tried
   update_statuses(result.updates)
   git_commit(a)                              # one activation = one commit
 ```
 
 ## Module map
 
-| Module            | SPEC section | Responsibility |
-|-------------------|--------------|----------------|
-| `annotations.py`  | §03, §04, §05 | grammar, kinds, statuses, lifecycles |
-| `regions.py`      | §03, §09 | region resolution, region/structure hashing, staleness |
-| `repo.py`         | §01, §04 | the medium: files, ID minting, targeted edits |
-| `graph.py`        | §08 | cheap static import graph (one hop each way) |
-| `context.py`      | §08 | deterministic context assembly + snapshot |
-| `diffutil.py`     | §07, §11 | diff channel guard, `diff_hash` |
-| `patcher.py`      | §07 | tolerant unified-diff applier (context-matched, ignores hunk line numbers) |
-| `gitutil.py`      | §10 | one activation = one commit; history as medium |
-| `checks.py`       | §06 | pytest + ruff in a manifest-derived venv |
-| `models.py`       | §01, §07 | the transforms (Anthropic + scriptable) |
-| `handlers.py`     | §07 | one handler per kind; strict output contract |
-| `scheduler.py`    | §06, §11 | the loop, gating, priority, strikes, oscillation |
-| `cli.py`          | §12 | the CLI surface |
+| Module            | Responsibility |
+|-------------------|----------------|
+| `annotations.py`  | grammar, kinds, statuses, lifecycles |
+| `regions.py`      | region resolution, region/structure hashing, staleness |
+| `repo.py`         | the medium: files, ID minting, targeted edits |
+| `graph.py`        | cheap static import graph (one hop each way) |
+| `context.py`      | deterministic context assembly + snapshot |
+| `diffutil.py`     | diff channel guard, `diff_hash` |
+| `patcher.py`      | tolerant unified-diff applier (context-matched, ignores hunk line numbers) |
+| `gitutil.py`      | one activation = one commit; history as medium |
+| `checks.py`       | the declared check manifest, run in a manifest-derived venv |
+| `models.py`       | the transforms (Anthropic + scriptable) |
+| `handlers.py`     | one handler per kind; strict output contract |
+| `scheduler.py`    | the loop, gating, priority, strikes, oscillation |
+| `cli.py`          | the CLI surface |
 
-## Failure handling (SPEC §11)
+## Checks: how Stig runs what it built
+
+Arbitration is declared in the medium, not hardcoded. `pyproject.toml` carries a
+`[[tool.stig.checks]]` array; the scheduler runs those commands in order after
+every activation, and the first non-zero exit reverts the diff and records a
+`@tried`.
+
+```toml
+[[tool.stig.checks]]
+name = "tests"
+cmd = ["python", "-m", "pytest", "-q"]
+timeout = 300
+ok_exit = [0, 5]            # 5 is pytest's "no tests collected"
+
+[[tool.stig.checks]]
+name = "app-runs"           # the point: exercise the thing, not just import it
+cmd = ["python", "-m", "myapp", "--help"]
+timeout = 30
+```
+
+This is how Stig tests its own output without an agent watching. A check that
+boots the app and probes it turns "does it actually work?" into a verdict the
+scheduler can act on, written back into the repository as a commit or a `@tried`
+— which is what the *next* stateless call reads instead of remembering a session.
+
+| Key | Meaning |
+|-----|---------|
+| `name` | what appears in the failure text the next handler reads |
+| `cmd` | argv, never a shell string — no `shell=True` anywhere |
+| `timeout` | seconds, default 120. Always bounded: the loop has no watchdog, so a check that hangs is a check that failed |
+| `ok_exit` | exit codes that count as success, default `[0]` |
+
+Rules worth knowing:
+
+- **Declaring nothing keeps the old behavior** — pytest plus ruff, with the
+  "no tests collected" and "ruff not installed" tolerances. Repositories that
+  never opt in are unaffected.
+- **The table is versioned, human-editable, and model-reachable** through the
+  ordinary guarded diff channel. What does *not* exist is a "run this command"
+  attribute on an annotation: annotation bodies stay data, so nothing a
+  handler writes into a body can become a command.
+- **Checks must be deterministic.** A failure costs a strike and writes a
+  `diff_hash` into the oscillation ledger, so a flaky end-to-end check strands
+  goals as `stuck` and rejects valid diffs as repeats. Use ephemeral ports,
+  fixed seeds, no network.
+- **Verification needing human judgment** — does the UI look right? — belongs in
+  an `@unresolved … needs-human`, not in a check.
+- `stig check` validates the table without executing anything, so CI catches a
+  malformed declaration instead of a mystery failed activation. A malformed
+  table at run time is an ordinary failed activation, never a crash.
+
+## Failure handling
 
 - **Loops/thrash** — a per-annotation strike cap (default 3), stored as `strikes=N`
   on the annotation itself (never in scheduler memory). At cap, each actionable
@@ -171,11 +223,11 @@ loop:
 ## Tests
 
 ```bash
-python -m pytest -q      # 115 tests, hermetic (scripted model + stub checks)
+python -m pytest -q      # 144 tests, hermetic (scripted model + stub checks)
 python -m ruff check stig tests
 ```
 
-The suite exercises the acceptance-test scenarios (SPEC §13) at the machinery
+The suite exercises the acceptance-test scenarios at the machinery
 level: reaching fixpoint, kill-and-resume equivalence, co-editing, staleness
 demotion, the stuck/blocked path, and the constraint graduation relay — plus the
 CLI surface, the structured-channel parser, and the diff-guard/applier
@@ -187,10 +239,4 @@ and driven through the console script, and `stig check` against this repository'
 own annotations. No `ANTHROPIC_API_KEY` is provided to the test job — the suite
 is hermetic, and withholding the key is what keeps it that way.
 
-<a name="spec"></a>
-## Specification
 
-`SPEC-001 · Stig MVP · draft 0.3` is the authoritative, normative description of
-this behavior (RFC 2119 keywords apply). It is a separate document and is **not
-vendored in this repository** — the `SPEC §NN` references throughout the source
-point into it. This README summarizes it; where the two disagree, the spec wins.

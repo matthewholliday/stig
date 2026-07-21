@@ -1,4 +1,4 @@
-"""The medium: the repository as a store of annotations (SPEC §01, §04).
+"""The medium: the repository as a store of annotations.
 
 The repository — source files and git history — carries all working state.
 This module reads and writes the file half; ``gitutil`` covers the history half.
@@ -15,7 +15,7 @@ _SKIP_DIRS = {".git", ".stig", "__pycache__", ".venv", "venv", ".pytest_cache", 
 
 
 class DuplicateIDError(ValueError):
-    """Two annotations share an ID — a grammar error (SPEC §04)."""
+    """Two annotations share an ID — a grammar error."""
 
 
 class PathEscapeError(ValueError):
@@ -81,7 +81,7 @@ class Repo:
     def is_repo_scoped(self, ann: Annotation) -> bool:
         return ann.file == ARCHITECTURE_FILE
 
-    # -- ID minting (SPEC §04): the scheduler is the sole minting authority ---
+    # -- ID minting: the scheduler is the sole minting authority --------------
 
     def _next_counters(self, annotations: list[Annotation]) -> dict[str, int]:
         counters: dict[str, int] = {k: 0 for k in KIND_PREFIX}

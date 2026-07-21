@@ -1,4 +1,4 @@
-"""The CLI surface (SPEC §12).
+"""The CLI surface.
 
     stig run [--budget N] [--dry-run] [--trust] [--adopt]
     stig step
@@ -19,7 +19,7 @@ import os
 import sys
 
 from .annotations import PERMANENT_KINDS, GrammarError
-from .checks import MANIFEST_FILES, RealChecks
+from .checks import MANIFEST_FILES, CheckManifestError, RealChecks, load_check_specs
 from .gitutil import Git, GitError, init_repo
 from .models import DEFAULT_MODEL, AnthropicModel
 from .regions import (
@@ -33,7 +33,7 @@ from .scheduler import Scheduler
 
 
 def _dirty_guard(git: Git, adopt: bool) -> bool:
-    """Stig refuses to run with uncommitted human changes (SPEC §10)."""
+    """Stig refuses to run with uncommitted human changes."""
     if not git.has_uncommitted_changes():
         return True
     if adopt:
@@ -58,7 +58,7 @@ def _make_scheduler(args, repo: Repo, git: Git) -> Scheduler:
 
 
 def _medium_error(exc: Exception) -> int:
-    """A malformed medium is a user-fixable error, not a traceback (SPEC §04)."""
+    """A malformed medium is a user-fixable error, not a traceback."""
     print(f"stig: {exc}", file=sys.stderr)
     return 1
 
@@ -120,7 +120,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_check(args) -> int:
-    """Parse + hash pass only; CI-friendly (SPEC §12)."""
+    """Parse + hash pass only; CI-friendly."""
     repo = Repo(args.root)
     errors: list[str] = []
     warnings: list[str] = []
@@ -131,6 +131,13 @@ def cmd_check(args) -> int:
     except (DuplicateIDError, GrammarError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    # Validate the check declarations without executing any of them: a bad
+    # manifest is the same class of error as bad grammar, and CI should see it
+    # here rather than as a mystery failed activation later.
+    try:
+        load_check_specs(args.root)
+    except CheckManifestError as exc:
+        errors.append(str(exc))
     struct_hash = repo_structure_hash(py_files)
     for ann in annotations:
         if ann.kind == "constraint" and ann.status in ("verified", "enforced"):
@@ -149,7 +156,7 @@ def cmd_check(args) -> int:
                     errors.append(
                         f"{ann.id}: enforced_by test(s) not found: {', '.join(missing)}"
                     )
-        # Empty-region warning (SPEC §03).
+        # Empty-region warning.
         if ann.kind in ("goal", "constraint") and not repo.is_repo_scoped(ann):
             if repo.exists(ann.file) and not region_has_executable_lines(ann, repo.read(ann.file)):
                 warnings.append(f"{ann.id}: region contains zero executable lines")
@@ -165,7 +172,7 @@ def cmd_check(args) -> int:
 
 
 def cmd_strip(args) -> int:
-    """Remove resolved annotations; keep permanent records by default (SPEC §12)."""
+    """Remove resolved annotations; keep permanent records by default."""
     repo = Repo(args.root)
     try:
         annotations = repo.parse_all()
@@ -178,7 +185,7 @@ def cmd_strip(args) -> int:
     archived: list[str] = []
     to_remove: list = []
     for ann in annotations:
-        # @decision and @tried are the permanent record (SPEC §03): they are
+        # @decision and @tried are the permanent record: they are
         # never consumed, and --all does not mean "including those".
         if ann.kind in PERMANENT_KINDS and not (
             args.archive and ann.kind == "tried" and ann.attrs.get("goal") in satisfied_goals
@@ -221,6 +228,32 @@ requires-python = ">=3.10"
 
 [tool.ruff]
 line-length = 100
+
+# Stig runs these in order after every activation; the first non-zero exit
+# reverts the diff and records a @tried. This table is what "does it work?"
+# means in this project — edit it. Add a check that actually exercises the
+# app (a CLI invocation, a boot-and-probe smoke test) and Stig will hold every
+# diff to it. `cmd` is argv, never a shell string, and every check is bounded
+# by its timeout: a check that hangs is a check that failed.
+[[tool.stig.checks]]
+name = "tests"
+cmd = ["python", "-m", "pytest", "-q"]
+timeout = 300
+ok_exit = [0, 5]  # 5 is "no tests collected", which a young project still hits
+
+[[tool.stig.checks]]
+name = "lint"
+cmd = ["python", "-m", "ruff", "check", "."]
+timeout = 60
+"""
+
+# Scaffolding a real check, rather than an empty tests/, means the first
+# activation is arbitrated by something instead of passing vacuously — and it
+# catches the failure mode the @decision below warns about, where a stray
+# top-level module shadows the package on import.
+_SMOKE_TEST_TEMPLATE = """\
+def test_package_imports():
+    import {package}  # noqa: F401
 """
 
 # The guidance is deliberately prose, not example annotations: a line matching
@@ -316,6 +349,8 @@ def cmd_init(args) -> int:
                      _ARCHITECTURE_TEMPLATE.format(package=package), created, skipped)
     _write_if_absent(root, f"{package}/__init__.py", "", created, skipped)
     _write_if_absent(root, "tests/__init__.py", "", created, skipped)
+    _write_if_absent(root, "tests/test_smoke.py",
+                     _SMOKE_TEST_TEMPLATE.format(package=package), created, skipped)
 
     if args.seed:
         rc = cmd_seed(argparse.Namespace(root=root, model=args.model, prompt=args.seed))
@@ -343,7 +378,7 @@ def cmd_init(args) -> int:
 
 
 def cmd_seed(args) -> int:
-    """Sugar: one model call that writes initial @goal annotations (SPEC §12)."""
+    """Sugar: one model call that writes initial @goal annotations."""
     repo = Repo(args.root)
     model = AnthropicModel(model=getattr(args, "model", DEFAULT_MODEL))
     system = (
@@ -372,7 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-venv", action="store_true", help="run checks in the current env")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    _TRUST_HELP = "skip the check suite; accept the model's diff without pytest/ruff"
+    _TRUST_HELP = "skip the check suite; accept the model's diff unarbitrated"
     _ADOPT_HELP = "commit pre-existing uncommitted changes as human changes first"
 
     p_run = sub.add_parser("run", help="loop to fixpoint, blocked, or budget")

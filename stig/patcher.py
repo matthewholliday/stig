@@ -1,4 +1,4 @@
-"""A tolerant unified-diff applier (SPEC §07 diff channel).
+"""A tolerant unified-diff applier.
 
 `git apply` is strict about hunk-header line counts, which stateless model calls
 frequently get wrong (bare ``@@`` markers, off-by-one offsets). This applier
@@ -121,7 +121,7 @@ def _apply_to_file(original: str, hunks: list[list[tuple[str, str]]]) -> str:
 
 
 def _assert_annotations_unchanged(repo: Repo, path: str, new_text: str | None) -> None:
-    """The diff channel is for code only (SPEC §07).
+    """The diff channel is for code only.
 
     Enforced by comparing the file's annotation lines before and after, rather
     than by inspecting diff markers. Marker inspection is necessarily partial —

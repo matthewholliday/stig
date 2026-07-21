@@ -1,4 +1,4 @@
-"""Context assembly (SPEC §08).
+"""Context assembly.
 
 The read path is a deterministic function of the annotation, not a retrieval
 heuristic. Because state is colocated with code, opening the right files is the
@@ -28,7 +28,7 @@ def _hash(text: str) -> str:
 
 
 def _signatures(text: str) -> list[str]:
-    """Top-level def/class signatures — a compressed repo map (SPEC §08 item 4)."""
+    """Top-level def/class signatures — a compressed repo map."""
     out: list[str] = []
     try:
         tree = ast.parse(text)

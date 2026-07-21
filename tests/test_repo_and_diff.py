@@ -46,7 +46,7 @@ def test_diff_guard_allows_code():
 
 def test_diff_guard_catches_hunks_with_no_at_header():
     """The applier tolerates a missing `@@` header, so the guard must too — a
-    guard with a stricter parser than the applier is a bypass (SPEC §07, §11)."""
+    guard with a stricter parser than the applier is a bypass."""
     diff = (
         "--- a/x.py\n+++ b/x.py\n"
         "-# @constraint(c01, status=asserted): must hold\n"

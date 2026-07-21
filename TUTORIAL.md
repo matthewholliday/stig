@@ -59,7 +59,7 @@ environment — `ANTHROPIC_API_KEY`, or an `ant auth login` profile.
 
 > **A note on the two virtualenvs.** The one you just made is where the `stig`
 > command lives. Separately, Stig builds its *own* venv at `.stig/venv` inside
-> whatever project it's working on, and runs pytest and ruff in there. That
+> whatever project it's working on, and runs the project's checks in there. That
 > second venv is a derived artifact of the project's manifest — Stig rebuilds it
 > whenever `pyproject.toml` or `requirements.txt` changes, and `.stig/` ignores
 > itself so it never lands in your history. Pass `--no-venv` to run checks in
@@ -73,7 +73,7 @@ environment — `ANTHROPIC_API_KEY`, or an `ant auth login` profile.
 $ stig init tempo
 initialized /path/to/tempo
   package: tempo/
-  created: git repository, pyproject.toml, ARCHITECTURE.anno, tempo/__init__.py, tests/__init__.py
+  created: git repository, pyproject.toml, ARCHITECTURE.anno, tempo/__init__.py, tests/__init__.py, tests/test_smoke.py
   committed: stig init: scaffold project
 
 Next: write a goal in ARCHITECTURE.anno, commit, then `stig run`.
@@ -82,8 +82,14 @@ $ cd tempo
 ```
 
 That's a git repository, a manifest (so the check suite has something to build a
-venv from), the annotation file, a package, a tests directory — and a commit,
-because Stig refuses to run against a dirty tree.
+venv from), the annotation file, a package, a tests directory with one real
+smoke test — and a commit, because Stig refuses to run against a dirty tree.
+
+The manifest also carries a `[[tool.stig.checks]]` table naming what Stig runs
+after every activation. It starts as pytest plus ruff, and it is meant to be
+edited: adding a check that *runs the app* — a CLI invocation, a boot-and-probe
+— is how you make "it actually works" something Stig verifies rather than
+something you check by hand afterward.
 
 `init` never overwrites. Run it inside an existing project and it adds only
 what's missing, reporting the rest as `kept existing`. Re-running it is a no-op.
@@ -533,7 +539,7 @@ resets its strikes to 0 while keeping the `@tried` history.
 - `--adopt` commits pre-existing uncommitted changes as human changes rather
   than refusing to run. Convenient; know that it commits whatever is in your
   tree.
-- `--trust` skips the pytest/ruff check suite. Faster, and it means a model diff
+- `--trust` skips the check suite entirely. Faster, and it means a model diff
   lands without ever being executed. Every other gate — the annotation-line
   guard, oscillation detection, path escaping, patch application — still runs.
   Reach for it when the project has no meaningful test suite yet, not to get

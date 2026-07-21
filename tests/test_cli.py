@@ -1,4 +1,4 @@
-"""The CLI surface (SPEC §12).
+"""The CLI surface.
 
 These exercise the commands that never touch a model — status, check, strip —
 plus the guards that keep run/step from turning a malformed medium or a missing
@@ -70,6 +70,29 @@ def test_check_reports_stale_verification(in_repo, capsys):
     assert "stale verification" in capsys.readouterr().err
 
 
+def test_check_reports_a_malformed_check_manifest(in_repo, capsys):
+    """A bad check declaration is the same class of error as bad grammar: CI
+    should catch it here, not as a mystery failed activation later."""
+    repo, _ = in_repo
+    repo.write(
+        "pyproject.toml",
+        '[project]\nname = "x"\n\n[[tool.stig.checks]]\nname = "t"\ncmd = "pytest -q"\n',
+    )
+    assert main(["check"]) == 1
+    assert "cmd must be" in capsys.readouterr().err
+
+
+def test_check_accepts_a_well_formed_check_manifest(in_repo, capsys):
+    repo, _ = in_repo
+    repo.write(
+        "pyproject.toml",
+        '[project]\nname = "x"\n\n[[tool.stig.checks]]\n'
+        'name = "tests"\ncmd = ["python", "-m", "pytest", "-q"]\n',
+    )
+    assert main(["check"]) == 0
+    assert "ok:" in capsys.readouterr().out
+
+
 # -- strip ------------------------------------------------------------------
 
 def _bodies(repo):
@@ -95,7 +118,7 @@ def test_strip_removes_resolved_keeps_permanent(in_repo, capsys):
 
 
 def test_strip_all_still_keeps_the_permanent_record(in_repo):
-    """SPEC §03: @decision and @tried are never consumed. --all widens the net
+    """@decision and @tried are never consumed. --all widens the net
     over goals and questions; it does not mean 'including those'."""
     repo, _ = in_repo
     repo.write(
