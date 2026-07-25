@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [claude/stig-spec-i4gtmh, main]
+    branches: [main]
   pull_request:
 
 # A superseded run on the same branch is wasted compute; keep only the newest.
