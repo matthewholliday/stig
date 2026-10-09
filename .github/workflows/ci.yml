@@ -99,5 +99,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t stig:ci .
+      # Shared runners can exhaust Docker Hub's anonymous pull quota.
+      # Use the public cache first, falling back upstream on a cache miss.
+      - run: |
+          docker build --build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim-bookworm -t stig:ci . \
+            || docker build -t stig:ci .
       - run: bash packaging/smoke-container.sh stig:ci

@@ -52,6 +52,9 @@ docker run --rm stig:local --help
 The image includes Python 3.12, Git, the Anthropic SDK, pytest, and ruff.
 Runtime dependencies are pinned in `packaging/container-requirements.txt`.
 It runs as an unprivileged user and supports Linux ARM64 and AMD64.
+If Docker Hub rate-limits your build, add
+`--build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim-bookworm`.
+CI uses that public cache with an upstream fallback.
 
 Mount the project you want Stig to work on at `/workspace`. All code,
 annotations, and activation commits persist in that mounted repository:
