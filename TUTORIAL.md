@@ -55,13 +55,14 @@ Error: Command '[.../bin/python3.10', '-m', 'ensurepip', ...]' returned non-zero
 use it.
 
 The `anthropic` extra is what powers real activations. Credentials come from the
-environment — `ANTHROPIC_API_KEY`, or an `ant auth login` profile.
+environment via `ANTHROPIC_API_KEY`.
 
 > **A note on the two virtualenvs.** The one you just made is where the `stig`
 > command lives. Separately, Stig builds its *own* venv at `.stig/venv` inside
 > whatever project it's working on, and runs the project's checks in there. That
 > second venv is a derived artifact of the project's manifest — Stig rebuilds it
-> whenever `pyproject.toml` or `requirements.txt` changes, and `.stig/` ignores
+> whenever a dependency manifest, Python runtime, platform, or project location
+> changes, and `.stig/` ignores
 > itself so it never lands in your history. Pass `--no-venv` to run checks in
 > the current environment instead.
 

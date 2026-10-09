@@ -98,6 +98,7 @@ class Scheduler:
         self.ctx = context_builder or ContextBuilder(repo)
         self.log = logger or (lambda *a, **k: None)
         self._strike_resets: set[str] = set()
+        self._prepared_changed = False
 
     # -- top of loop: parse, mint ids, demote stale ---------------------------
 
@@ -115,12 +116,19 @@ class Scheduler:
             self._reset_reopened_strikes(annotations, write=False)
             self._demote_stale(annotations, write=False)
             return annotations
+        before = self.repo.files_map()
         self.repo.assign_missing_ids()
         self.repo.check_duplicates()
         annotations = self.repo.parse_all()
         self._reset_reopened_strikes(annotations)
         self._demote_stale(annotations)
+        self._prepared_changed = before != self.repo.files_map()
         return self.repo.parse_all()
+
+    def _commit_preparation(self) -> None:
+        """Persist normalization when no activation will carry it into history."""
+        if self._prepared_changed:
+            self.git.commit("stig: normalize annotations")
 
     def _assign_missing_ids_in_memory(self, annotations: list[Annotation]) -> None:
         counters = self.repo._next_counters(annotations)  # noqa: SLF001 - internal helper
@@ -290,6 +298,7 @@ class Scheduler:
         annotations = self._prepare()
         actionable = self._actionable(annotations)
         if not actionable:
+            self._commit_preparation()
             return StepResult(outcome="terminal", terminal=self._terminal(annotations, 0))
         active = self._pick(actionable)
         return self._activate(active, annotations)
@@ -312,9 +321,11 @@ class Scheduler:
             annotations = self._prepare()
             actionable = self._actionable(annotations)
             if not actionable:
+                self._commit_preparation()
                 return self._terminal(annotations, activations)
             active = self._pick(actionable)
             if activations >= self.budget:
+                self._commit_preparation()
                 return Outcome("budget", f"activation budget of {self.budget} exhausted", activations)
             self._activate(active, annotations)
             activations += 1

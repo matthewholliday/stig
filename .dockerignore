@@ -1,0 +1,8 @@
+*
+!Dockerfile
+!pyproject.toml
+!README.md
+!stig/
+!stig/*.py
+!packaging/
+!packaging/container-requirements.txt

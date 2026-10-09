@@ -37,8 +37,76 @@ pip install -e ".[anthropic,dev]"   # anthropic extra powers the real model call
 ```
 
 Handler calls use `claude-opus-4-8` by default and read credentials from the
-environment (`ANTHROPIC_API_KEY`, or an `ant auth login` profile). The scheduler
+environment (`ANTHROPIC_API_KEY`). The scheduler
 machinery runs without the optional dependency — only live activations need it.
+
+## Run in a container
+
+Build the CLI image from this checkout:
+
+```bash
+docker build -t stig:local .
+docker run --rm stig:local --help
+```
+
+The image includes Python 3.12, Git, the Anthropic SDK, pytest, and ruff.
+Runtime dependencies are pinned in `packaging/container-requirements.txt`.
+It runs as an unprivileged user and supports Linux ARM64 and AMD64.
+If Docker Hub rate-limits your build, add
+`--build-arg PYTHON_IMAGE=mirror.gcr.io/library/python:3.12-slim-bookworm`.
+CI uses that public cache with an upstream fallback.
+
+Mount the project you want Stig to work on at `/workspace`. All code,
+annotations, and activation commits persist in that mounted repository:
+
+```bash
+# Run from the target project's directory.
+docker run --rm --init --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD,dst=/workspace" stig:local status
+
+docker run --rm --init --user "$(id -u):$(id -g)" \
+  --mount "type=bind,src=$PWD,dst=/workspace" stig:local run --dry-run
+
+# Export ANTHROPIC_API_KEY in your shell first; Docker forwards its value.
+docker run --rm --init --user "$(id -u):$(id -g)" \
+  --env ANTHROPIC_API_KEY \
+  --mount "type=bind,src=$PWD,dst=/workspace" stig:local run --budget 10
+```
+
+To scaffold a project, create its directory, mount it in the same way, and
+use `init --package myapp` in place of `status`. The explicit package name
+avoids deriving the package name from the container's `/workspace` path.
+Global CLI flags, such as `--model`, go before the subcommand.
+
+The UID/GID option keeps mounted files owned by your user on Linux. Git uses
+the repository's local commit identity when configured, otherwise `Stig
+<stig@example.com>`. You can override that with Docker environment options
+for `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`, and
+`GIT_COMMITTER_EMAIL`. Mount a normal checkout with its `.git` directory;
+linked Git worktrees need their shared Git directory accessible too.
+
+Checks use a project environment at `.stig/venv`. Stig rebuilds it when the
+manifest, Python runtime, platform, or project location changes, including
+when switching between your host and the container. Dependency installation
+needs network access. Projects needing native libraries, compilers, or other
+language runtimes should extend this image with those dependencies.
+
+Smoke-test the image without a model credential or paid API call:
+
+```bash
+bash packaging/smoke-container.sh stig:local
+```
+
+This exercises scaffolding, repeated runs, validation, a real project check
+environment, and a scripted activation with a Git commit. CI builds and
+runs the same smoke test. To refresh the pinned dependencies with `uv`:
+
+```bash
+uv pip compile pyproject.toml --extra anthropic --extra dev \
+  --python-version 3.12 --no-annotate --no-header \
+  --upgrade --upgrade-package 'ruff==0.15.22' \
+  --output-file packaging/container-requirements.txt
+```
 
 ## The five kinds
 
@@ -177,7 +245,7 @@ scheduler can act on, written back into the repository as a commit or a `@tried`
 
 Rules worth knowing:
 
-- **Declaring nothing keeps the old behavior** — pytest plus ruff, with the
+- **Declaring nothing runs pytest plus ruff**, each bounded to 120 seconds, with the
   "no tests collected" and "ruff not installed" tolerances. Repositories that
   never opt in are unaffected.
 - **The table is versioned, human-editable, and model-reachable** through the
@@ -217,13 +285,17 @@ Rules worth knowing:
   writing — not by inspecting `+`/`-` markers, which a whole-file overwrite, a
   deletion, or an unmarked line slips past. Diff paths are untrusted and may not
   escape the repository root; a diff applies whole or not at all.
+- **Normalization without an activation** is committed as `stig: normalize
+  annotations` when the scheduler stops at fixpoint, blocked, or its budget.
+  This keeps newly assigned IDs and staleness changes from leaving the tree
+  dirty and preventing the next run. These commits do not count as activations.
 - **Human reopen** — an actionable annotation whose `strikes` is at cap implies a
   human edit; the scheduler resets `strikes=0`, keeping the `@tried` history.
 
 ## Tests
 
 ```bash
-python -m pytest -q      # 144 tests, hermetic (scripted model + stub checks)
+python -m pytest -q      # hermetic (scripted model + stub checks)
 python -m ruff check stig tests
 ```
 

@@ -277,14 +277,86 @@ def test_declaring_nothing_still_runs_the_built_in_pair(workrepo, checks, monkey
     including the exit-5 and missing-ruff tolerances."""
     repo, _ = workrepo
     calls: list[list[str]] = []
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def spy(cmd, *a, **kw):
         calls.append(list(cmd))
-        return real_run(cmd, *a, **kw)
+        return real_popen(cmd, *a, **kw)
 
-    monkeypatch.setattr("stig.checks.subprocess.run", spy)
+    monkeypatch.setattr("stig.checks.subprocess.Popen", spy)
     # No tests here at all: pytest exits 5, which the built-in path tolerates.
     assert checks.run(repo.root).ok
     assert any("pytest" in " ".join(c) for c in calls)
     assert any("ruff" in " ".join(c) for c in calls)
+
+
+@pytest.mark.parametrize("module", ["pytest", "ruff"])
+def test_default_checks_cannot_hang(workrepo, checks, monkeypatch, module):
+    repo, _ = workrepo
+    monkeypatch.setattr("stig.checks.DEFAULT_TIMEOUT", 0.2)
+
+    def resolve(cmd, python):
+        code = "import time; time.sleep(60)" if module in cmd else "pass"
+        return [python, "-c", code]
+
+    monkeypatch.setattr(checks, "_resolve", resolve)
+    result = checks.run(repo.root)
+    assert not result.ok
+    assert f"check '{module}' timed out" in result.output
+
+
+@pytest.mark.parametrize("missing", ["ruff", "other_module"])
+def test_default_checks_only_tolerate_missing_ruff(workrepo, checks, monkeypatch, missing):
+    repo, _ = workrepo
+
+    def resolve(cmd, python):
+        if "ruff" in cmd:
+            code = (
+                "import sys; "
+                f"sys.stderr.write(sys.executable + ': No module named {missing}\\n'); "
+                "sys.exit(1)"
+            )
+            return [python, "-c", code]
+        return [python, "-c", "pass"]
+
+    monkeypatch.setattr(checks, "_resolve", resolve)
+    assert checks.run(repo.root).ok == (missing == "ruff")
+
+
+@pytest.mark.parametrize("change", ["runtime", "platform", "location", "manifest"])
+def test_venv_rebuilt_when_environment_changes(workrepo, monkeypatch, change):
+    repo, _ = workrepo
+    checks = RealChecks()
+    commands = []
+
+    def run(cmd, **kwargs):
+        commands.append(cmd)
+        if "venv" in cmd:
+            os.makedirs(os.path.dirname(checks._venv_python(repo.root)), exist_ok=True)
+            repo.write(os.path.relpath(checks._venv_python(repo.root), repo.root), "python")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("stig.checks.subprocess.run", run)
+    assert checks._ensure_venv(repo.root)[0]
+    commands.clear()
+    assert checks._ensure_venv(repo.root)[0]
+    assert not commands
+
+    if change == "runtime":
+        monkeypatch.setattr("stig.checks.sys.version", "different Python")
+    elif change == "platform":
+        monkeypatch.setattr("stig.checks.platform.machine", lambda: "different architecture")
+    elif change == "location":
+        import shutil
+
+        moved = repo.root + "-moved"
+        shutil.copytree(repo.root, moved)
+        from stig.repo import Repo
+
+        repo = Repo(moved)
+    else:
+        repo.write("requirements.txt", "pytest\n")
+
+    assert checks._ensure_venv(repo.root)[0]
+    assert commands[0][-2:] == ["--clear", os.path.join(repo.root, ".stig", "venv")]
+    assert len(commands) == 2
