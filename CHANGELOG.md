@@ -5,6 +5,17 @@ All notable changes to Stig are documented here. Format loosely follows
 
 ## [Unreleased]
 
+- Added a non-root Docker CLI image with pinned runtime dependencies, mounted
+  repository usage, and a CI smoke test covering checks and an activation commit.
+- Bound the fallback pytest and ruff checks to 120 seconds, including process
+  group cleanup on timeout.
+- Rebuild project environments when the runtime, platform, or repository path
+  changes; clear old environments so removed dependencies cannot linger.
+- Commit annotation normalization when stopping without an activation, so a
+  completed or budget-limited run does not leave the repository dirty.
+- Updated macOS builds to the macOS 15 ARM64 and Intel runners.
+- Corrected credential documentation to match the Anthropic SDK integration.
+
 - Checks are now declared in the medium: a `[[tool.stig.checks]]` array in
   `pyproject.toml` names the commands Stig runs after every activation,
   instead of a hardcoded pytest+ruff pair. Repositories that declare nothing

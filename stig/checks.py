@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -185,6 +186,15 @@ def _manifest_hash(root: str) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
+def _venv_hash(root: str) -> str:
+    """A venv is reusable only with the same manifest, runtime, and location."""
+    parts = (
+        _manifest_hash(root), os.path.abspath(root), sys.executable, sys.version,
+        platform.system(), platform.machine(),
+    )
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
 def _terminate(proc: subprocess.Popen) -> None:
     """Kill the whole process group, not just the direct child.
 
@@ -223,7 +233,7 @@ class RealChecks:
     def _ensure_venv(self, root: str) -> tuple[bool, str]:
         stig_dir = ensure_stig_dir(root)
         hash_path = os.path.join(stig_dir, "venv.hash")
-        current = _manifest_hash(root)
+        current = _venv_hash(root)
         stored = ""
         if os.path.exists(hash_path):
             with open(hash_path, encoding="utf-8") as fh:
@@ -234,7 +244,8 @@ class RealChecks:
         # Rebuild: the venv is a derived artifact of the manifest.
         venv_dir = os.path.join(stig_dir, "venv")
         proc = subprocess.run(
-            [sys.executable, "-m", "venv", venv_dir], capture_output=True, text=True
+            [sys.executable, "-m", "venv", "--clear", venv_dir],
+            capture_output=True, text=True,
         )
         if proc.returncode != 0:
             return False, f"venv creation failed: {proc.stderr}"
@@ -296,19 +307,26 @@ class RealChecks:
 
     def _run_default(self, root: str, python: str) -> CheckResult:
         """The built-in pair, for repositories that declare nothing."""
-        pytest = subprocess.run(
-            [python, "-m", "pytest", "-q"], cwd=root, capture_output=True, text=True
+        tests = self._run_spec(
+            CheckSpec("pytest", [python, "-m", "pytest", "-q"],
+                      timeout=DEFAULT_TIMEOUT, ok_exit=[0, 5]),
+            root, python,
         )
         # Exit code 5 means "no tests collected" — not a failure.
-        if pytest.returncode not in (0, 5):
-            return CheckResult(False, f"pytest failed:\n{pytest.stdout}\n{pytest.stderr}")
+        if not tests.ok:
+            return tests
 
-        ruff = subprocess.run(
-            [python, "-m", "ruff", "check", "."], cwd=root, capture_output=True, text=True
+        lint = self._run_spec(
+            CheckSpec("ruff", [python, "-m", "ruff", "check", "."],
+                      timeout=DEFAULT_TIMEOUT),
+            root, python,
         )
         # A missing ruff (nonzero with an import error) is tolerated; lint failures are not.
-        if ruff.returncode not in (0,) and "No module named" not in ruff.stderr:
-            return CheckResult(False, f"ruff failed:\n{ruff.stdout}\n{ruff.stderr}")
+        missing_ruff = any(
+            line.endswith(": No module named ruff") for line in lint.output.splitlines()
+        )
+        if not lint.ok and not missing_ruff:
+            return lint
 
         return CheckResult(True, "checks passed")
 

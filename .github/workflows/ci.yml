@@ -94,3 +94,10 @@ jobs:
           cache: pip
       - run: pip install -e .
       - run: stig check
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t stig:ci .
+      - run: bash packaging/smoke-container.sh stig:ci

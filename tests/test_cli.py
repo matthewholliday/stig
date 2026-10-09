@@ -263,6 +263,28 @@ def test_init_template_guidance_is_not_itself_actionable(tmp_path, monkeypatch):
     assert kinds == ["decision"]
 
 
+@pytest.mark.parametrize("command", [["run"], ["step"], ["run", "--budget", "0"]])
+def test_normalization_without_activation_leaves_repo_runnable(tmp_path, monkeypatch, command):
+    monkeypatch.chdir(tmp_path)
+    assert main(["init", "tempo"]) == 0
+    monkeypatch.chdir(tmp_path / "tempo")
+    from stig.gitutil import Git
+    from stig.repo import Repo
+
+    repo = Repo(str(tmp_path / "tempo"))
+    git = Git(repo.root)
+    if "--budget" in command:
+        repo.append_lines("ARCHITECTURE.anno", ["# @goal(, status=open): write code"])
+        git.commit("human: add goal")
+    expected = 1 if "--budget" in command else 0
+    assert main(command) == expected
+    assert not git.has_uncommitted_changes()
+    assert git.activation_count() == 0
+    head = git.head()
+    assert main(command) == expected
+    assert git.head() == head
+
+
 def test_init_records_the_layout_so_handlers_cannot_shadow_the_package(tmp_path, monkeypatch):
     """Regression: handlers wrote `<pkg>.py` beside the scaffolded `<pkg>/`.
 
